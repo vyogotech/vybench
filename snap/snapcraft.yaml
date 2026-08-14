@@ -249,7 +249,7 @@ parts:
         mkdir -p /tmp/bench-bootstrap
         python3.14 -m venv /tmp/bench-bootstrap/env
         /tmp/bench-bootstrap/env/bin/pip install --upgrade pip setuptools wheel
-        /tmp/bench-bootstrap/env/bin/pip install 'frappe-bench==5.21.5' 'click<8.2' redis mysql-connector-python
+        /tmp/bench-bootstrap/env/bin/pip install 'frappe-bench==5.31.0' redis mysql-connector-python
 
         # Ensure bootstrap bench, Node 24, and yarn are in PATH
         export PATH=/tmp/bench-bootstrap/env/bin:$PATH
@@ -270,7 +270,12 @@ parts:
           frappe-bench
 
         # Ensure bench CLI is installed inside the snap bench env
-        ./frappe-bench/env/bin/pip install 'frappe-bench==5.21.5' 'click<8.2'
+        # No click pin: bench init installs the Click 8.3.x frappe v16 requires
+        # (~=8.3.1), and pinning <8.2 downgraded it to 8.1.8 -- which frappe then
+        # reports as incompatible. bench declares click~=8.2.0, frappe declares
+        # ~=8.3.1, and no version satisfies both; frappe is what actually runs.
+        ./frappe-bench/env/bin/pip install 'frappe-bench==5.31.0'
+        ./frappe-bench/env/bin/pip install --upgrade 'click~=8.3.1'
       "
 
       # --- Bundle Python 3.14 and fix virtualenv symlinks ---

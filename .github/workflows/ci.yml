@@ -1,0 +1,200 @@
+name: CI
+
+# Validation for day-to-day work. Releases live in build.yml (tags/dispatch).
+#
+# Three ideas, in order of how much runner time they save:
+#
+#   1. Documentation changes build nothing. paths-ignore below.
+#   2. Everything gets the FAST tier (~1 min): lint, template drift, and a full
+#      package assembly against a synthetic payload. Most defects are assembly
+#      defects and this catches them without building a bench.
+#   3. The SLOW tier (~40 min per distribution: real bench, real install in a
+#      systemd container) runs only for the format whose code actually changed.
+#      A snap-only change never triggers a .deb build, and vice versa.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE', '.gitignore']
+  pull_request:
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE', '.gitignore']
+  workflow_dispatch:
+    inputs:
+      force_full:
+        description: 'Run the slow builds regardless of what changed'
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # What changed?
+  # ---------------------------------------------------------------------------
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      deb: ${{ steps.filter.outputs.deb }}
+      snap: ${{ steps.filter.outputs.snap }}
+      shared: ${{ steps.filter.outputs.shared }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            # Native package code. The templates are the units, the setup tool
+            # and the configs -- all of which end up inside the .deb/.rpm.
+            deb:
+              - 'scripts/build-bench-payload.sh'
+              - 'scripts/package-deb.sh'
+              - 'scripts/package-rpm.sh'
+              - 'scripts/test-native-package.sh'
+              - 'scripts/lib/**'
+              - 'scripts/templates/**'
+              - 'packaging/**'
+            # Snap code only.
+            snap:
+              - 'snap/**'
+            # Touches both, so both must be rebuilt. The nginx template is here
+            # because the snap and the native packages both render it, and the
+            # fast tier's own harness is here because a change to it invalidates
+            # every result it produced.
+            shared:
+              - 'vendor/nginx/**'
+              - 'scripts/check-nginx-template-drift.sh'
+              - 'scripts/test-packaging-fast.sh'
+              - '.github/workflows/**'
+
+  # ---------------------------------------------------------------------------
+  # FAST tier -- always, ~1 minute
+  # ---------------------------------------------------------------------------
+  fast:
+    name: Lint & assembly tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tooling
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck rpm python3-yaml python3-packaging
+
+      # Workflow expressions and contexts are not validated until a run happens,
+      # and a bad matrix expression can silently produce ZERO jobs rather than an
+      # error -- which is exactly how the snap job went missing once.
+      - name: actionlint
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+
+      - name: Assembly tests (synthetic payload)
+        run: ./scripts/test-packaging-fast.sh
+
+      # Guards against a matrix that evaluates to nothing: a job that never runs
+      # looks identical to a job that passed.
+      - name: Assert every workflow job defines a non-empty matrix
+        run: |
+          python3 - <<'PY'
+          import glob, sys, yaml
+          bad = []
+          for f in glob.glob('.github/workflows/*.yml'):
+              wf = yaml.safe_load(open(f))
+              for name, job in (wf.get('jobs') or {}).items():
+                  m = job.get('strategy', {}).get('matrix')
+                  if m is None:
+                      continue
+                  # A literal (non-expression) matrix must have at least one entry.
+                  if isinstance(m, dict) and not any(
+                      (isinstance(v, list) and v) or (isinstance(v, str) and '${{' in v)
+                      for v in m.values()
+                  ):
+                      bad.append(f"{f}:{name}")
+          if bad:
+              sys.exit("matrix produces no combinations: " + ", ".join(bad))
+          print("all matrices are non-empty")
+          PY
+
+  # ---------------------------------------------------------------------------
+  # SLOW tier -- only for the format that changed
+  # ---------------------------------------------------------------------------
+  deb:
+    name: deb · ${{ matrix.distro }}
+    needs: [changes, fast]
+    if: >-
+      needs.changes.outputs.deb == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
+      inputs.force_full
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: ['ubuntu:24.04']   # one distro on CI; the release build does both
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build bench payload
+        run: |
+          ./scripts/build-bench-payload.sh --distro "${{ matrix.distro }}" \
+            --frappe-branch version-16 --apps erpnext --engine docker --output ./dist
+      - name: Build .deb
+        run: ./scripts/package-deb.sh --output ./dist
+      - name: Verify in a clean container
+        run: ./scripts/test-native-package.sh --distro "${{ matrix.distro }}" --engine docker
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-ci
+          path: dist/*.deb
+          retention-days: 7
+          if-no-files-found: error
+
+  snap:
+    name: snap · amd64
+    needs: [changes, fast]
+    if: >-
+      needs.changes.outputs.snap == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
+      inputs.force_full
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: snapcore/action-build@v1
+        id: build
+        with:
+          build-info: false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: snap-ci
+          path: ${{ steps.build.outputs.snap }}
+          retention-days: 7
+          if-no-files-found: error
+
+  # A single required status check. Without this, a branch protection rule has to
+  # name each job, and a SKIPPED job is not a PASSED one.
+  ci:
+    name: CI
+    needs: [fast, deb, snap]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Verdict
+        run: |
+          echo "fast: ${{ needs.fast.result }}"
+          echo "deb:  ${{ needs.deb.result }}"
+          echo "snap: ${{ needs.snap.result }}"
+          # 'skipped' is a pass here: it means nothing relevant to that format
+          # changed. 'failure' and 'cancelled' are not.
+          for r in "${{ needs.fast.result }}" "${{ needs.deb.result }}" "${{ needs.snap.result }}"; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "::error::a required job did not succeed"; exit 1 ;;
+            esac
+          done

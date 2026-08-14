@@ -23,7 +23,7 @@
 set -euo pipefail
 
 NODE_VERSION="24.19.0"
-BENCH_CLI_VERSION="5.21.5"
+BENCH_CLI_VERSION="5.31.0"
 BENCH_DIR=/opt/frappe-bench
 
 # Frappe v16 pins `requires-python = ">=3.14,<3.15"`. No distribution in the
@@ -195,7 +195,7 @@ PY
     bash -euxo pipefail -c "
       $PYTHON_BIN -m venv /tmp/bench-bootstrap
       /tmp/bench-bootstrap/bin/pip install --quiet --upgrade pip setuptools wheel
-      /tmp/bench-bootstrap/bin/pip install --quiet 'frappe-bench==$BENCH_CLI_VERSION' 'click<8.2'
+      /tmp/bench-bootstrap/bin/pip install --quiet 'frappe-bench==$BENCH_CLI_VERSION'
 
       yarn config set ignore-engines true || true
 
@@ -210,7 +210,19 @@ PY
 
       # The shipped bench must carry its own CLI: /opt/frappe-bench/env/bin/bench
       # is what every systemd unit invokes.
-      $BENCH_DIR/env/bin/pip install --quiet 'frappe-bench==$BENCH_CLI_VERSION' 'click<8.2'
+      #
+      # NOT pinned to click<8.2. That pin was carried over from the snap and is
+      # actively harmful here: bench init installs the Click 8.3.x that frappe
+      # v16 requires (~=8.3.1), and the pin then DOWNGRADED it to 8.1.8, leaving
+      # 'frappe 16.31.0 requires Click~=8.3.1, but you have click 8.1.8'.
+      $BENCH_DIR/env/bin/pip install --quiet 'frappe-bench==$BENCH_CLI_VERSION'
+
+      # frappe-bench declares click~=8.2.0 and frappe v16 declares click~=8.3.1.
+      # Those cannot both be satisfied -- no click version exists in both ranges.
+      # frappe is the application that actually runs under gunicorn and the
+      # workers, so it wins; bench's constraint is the conservative one and its
+      # CLI surface is exercised by test-native-package.sh.
+      $BENCH_DIR/env/bin/pip install --quiet --upgrade 'click~=8.3.1'
     "
 
   # --- extra apps ----------------------------------------------------------
@@ -303,6 +315,40 @@ PY
     echo "FATAL: venv base_prefix is '$VENV_BASE', expected '$PYTHON_HOME'." >&2
     echo "       pyvenv.cfg would point outside the package." >&2; exit 1; }
   "$BENCH_DIR/env/bin/bench" --version
+
+  # --- dependency consistency -----------------------------------------------
+  # A pip resolver conflict is a WARNING, not an error, so a mismatched
+  # dependency ships happily and fails at runtime. Assert that frappe's own
+  # declared requirements are satisfied by what is installed -- frappe is what
+  # gunicorn and the workers actually import.
+  "$BENCH_DIR/env/bin/python" - <<'PY'
+import sys
+from importlib.metadata import distribution, version
+from packaging.requirements import Requirement
+
+unmet = []
+for raw in distribution("frappe").requires or []:
+    req = Requirement(raw)
+    if req.marker and not req.marker.evaluate():
+        continue
+    try:
+        have = version(req.name)
+    except Exception:
+        unmet.append(f"{req.name}: NOT INSTALLED (frappe needs {req.specifier})")
+        continue
+    if req.specifier and not req.specifier.contains(have, prereleases=True):
+        unmet.append(f"{req.name}: have {have}, frappe needs {req.specifier}")
+
+if unmet:
+    sys.exit("FATAL: frappe's dependencies are not satisfied:\n  " + "\n  ".join(unmet))
+print("frappe dependency check: OK "
+      f"(click {version('click')}, semantic-version {version('semantic-version')})")
+PY
+
+  # Informational only: bench itself declares click~=8.2.0 and will be reported
+  # as conflicting here. That is expected and deliberate -- see the install step.
+  echo "--- pip check (the bench/click conflict below is expected) ---"
+  "$BENCH_DIR/env/bin/pip" check || true
   echo "--- pyvenv.cfg ---"; cat "$BENCH_DIR/env/pyvenv.cfg"
 
   # --- runtime library dependencies ----------------------------------------
