@@ -1,16 +1,16 @@
-name: frappista
+name: frappium
 title: Frappe Bench & ERPNext Server
 version: '16.0.0'
 summary: Single-node Frappe Bench & ERPNext environment for Linux
 description: |
-  Frappista packages Frappe Bench v16 (ERPNext) as a portable Linux snap.
+  Frappium packages Frappe Bench v16 (ERPNext) as a portable Linux snap.
   Includes Python 3.14, Node.js 24, Redis 7, MariaDB, Nginx, and wkhtmltopdf.
   Installs on any Linux distro with snapd: Fedora, Ubuntu, Debian, Arch, etc.
 license: GPL-3.0
-contact: https://github.com/vyogotech/frappista/issues
-issues: https://github.com/vyogotech/frappista/issues
-source-code: https://github.com/vyogotech/frappista
-website: https://github.com/vyogotech/frappista
+contact: https://github.com/vyogotech/frappium/issues
+issues: https://github.com/vyogotech/frappium/issues
+source-code: https://github.com/vyogotech/frappium
+website: https://github.com/vyogotech/frappium
 base: core24
 confinement: classic
 
@@ -92,7 +92,7 @@ apps:
     daemon: simple
     restart-condition: always
 
-  # Developer-mode asset rebuilder. Off unless `snap set frappista mode=developer`.
+  # Developer-mode asset rebuilder. Off unless `snap set frappium mode=developer`.
   watch:
     command: bin/watch-wrapper
     daemon: simple
@@ -101,7 +101,7 @@ apps:
 
   # Opt-in reverse proxy. Disabled by default because binding :80 collides with
   # any web server already on the host, and gunicorn already serves statics.
-  # Enable with: snap set frappista nginx=true
+  # Enable with: snap set frappium nginx=true
   nginx:
     command: bin/nginx-wrapper
     daemon: simple
@@ -299,12 +299,12 @@ parts:
       # pyvenv.cfg still points at the build host's interpreter. Left as-is, CPython
       # resolves the stdlib to the HOST /usr/lib/python3.14 at runtime, which is the
       # original OPENSSL_3.3.0 failure. Repoint it at the bundled interpreter via the
-      # revision-stable /snap/frappista/current symlink.
+      # revision-stable /snap/frappium/current symlink.
       PYVENV_CFG=$SNAPCRAFT_PART_INSTALL/opt/frappe-bench/env/pyvenv.cfg
       sed -i \
-        -e "s|^home = .*|home = /snap/frappista/current/usr/bin|" \
-        -e "s|^executable = .*|executable = /snap/frappista/current/usr/bin/python3.14|" \
-        -e "s|^base-executable = .*|base-executable = /snap/frappista/current/usr/bin/python3.14|" \
+        -e "s|^home = .*|home = /snap/frappium/current/usr/bin|" \
+        -e "s|^executable = .*|executable = /snap/frappium/current/usr/bin/python3.14|" \
+        -e "s|^base-executable = .*|base-executable = /snap/frappium/current/usr/bin/python3.14|" \
         "$PYVENV_CFG"
       echo "--- pyvenv.cfg after rewrite ---"; cat "$PYVENV_CFG"
 

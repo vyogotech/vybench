@@ -1,11 +1,11 @@
 #!/bin/bash
-# Runs on `snap set frappista ...`, and once after install.
+# Runs on `snap set frappium ...`, and once after install.
 #
-#   snap set frappista mode=production   # full managed stack (default)
-#   snap set frappista mode=developer    # datastores only; you run `bench serve`
-#   snap set frappista nginx=true        # opt-in reverse proxy (production only)
-#   snap set frappista nginx-port=8080
-#   snap set frappista bind=0.0.0.0      # expose the web port on the LAN
+#   snap set frappium mode=production   # full managed stack (default)
+#   snap set frappium mode=developer    # datastores only; you run `bench serve`
+#   snap set frappium nginx=true        # opt-in reverse proxy (production only)
+#   snap set frappium nginx-port=8080
+#   snap set frappium bind=0.0.0.0      # expose the web port on the LAN
 set -e
 
 # Datastores. Needed in BOTH modes -- `bench serve` is useless without a
@@ -29,8 +29,8 @@ case "$MODE" in
 esac
 snapctl set mode="$MODE"
 
-enable_svc()  { for s in $1; do snapctl start --enable "frappista.$s" 2>/dev/null || true; done; }
-disable_svc() { for s in $1; do snapctl stop --disable "frappista.$s" 2>/dev/null || true; done; }
+enable_svc()  { for s in $1; do snapctl start --enable "frappium.$s" 2>/dev/null || true; done; }
+disable_svc() { for s in $1; do snapctl stop --disable "frappium.$s" 2>/dev/null || true; done; }
 
 enable_svc "$INFRA"
 
@@ -65,7 +65,7 @@ PYEOF
 fi
 
 # `bench watch` rebuilds assets on change. Only meaningful in developer mode, and
-# even then it is opt-in: snap set frappista watch=true
+# even then it is opt-in: snap set frappium watch=true
 WATCH=$(snapctl get watch 2>/dev/null || true)
 if [ "$MODE" = "developer" ] && [ "$WATCH" = "true" ]; then
   enable_svc "watch"
@@ -82,5 +82,5 @@ fi
 # Recycle the web daemon so a mode/bind change takes effect. Guarded: this hook
 # also runs during the initial install, before the service exists.
 if [ "$MODE" = "production" ]; then
-  snapctl restart frappista.web 2>/dev/null || true
+  snapctl restart frappium.web 2>/dev/null || true
 fi

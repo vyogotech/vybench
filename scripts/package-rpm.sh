@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the Frappista .rpm from a bench payload.
+# Build the Frappium .rpm from a bench payload.
 #
 # This does NOT build the bench. Run scripts/build-bench-payload.sh first, in a
 # container of the distribution you are targeting -- the payload links against
@@ -70,11 +70,11 @@ command -v rpmbuild >/dev/null 2>&1 || {
   echo "FATAL: rpmbuild not found. Install rpm-build, or run this inside a" >&2
   echo "       container of the target distribution (see the header)." >&2; exit 1; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/frappista-rpm.XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/frappium-rpm.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
 STAGING="$WORK/root"
-echo "==> building frappista ${VERSION} (${RPM_ARCH}) for ${DISTRO}"
+echo "==> building frappium ${VERSION} (${RPM_ARCH}) for ${DISTRO}"
 stage_native_root "$STAGING" rhel "$PAYLOAD"
 
 mkdir -p "$WORK/rpmbuild"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
@@ -84,9 +84,9 @@ mkdir -p "$WORK/rpmbuild"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
 # its final path inside a container of this distribution.
 echo "==> packing staged root as Source0"
 tar --numeric-owner --owner=0 --group=0 \
-    -C "$STAGING" -czf "$WORK/rpmbuild/SOURCES/frappista-root-${VERSION}.tar.gz" .
+    -C "$STAGING" -czf "$WORK/rpmbuild/SOURCES/frappium-root-${VERSION}.tar.gz" .
 
-cp "$ROOT_DIR/packaging/frappista.spec" "$WORK/rpmbuild/SPECS/"
+cp "$ROOT_DIR/packaging/frappium.spec" "$WORK/rpmbuild/SPECS/"
 
 # The bundled interpreter's library dependencies were resolved at payload-build
 # time by asking rpm which packages own the .so files it loads. Passed as a
@@ -94,10 +94,10 @@ cp "$ROOT_DIR/packaging/frappista.spec" "$WORK/rpmbuild/SPECS/"
 # and a multi-line --define value does not expand reliably.
 RUNTIME_REQUIRES="$(echo "${RUNTIME_DEPS:-}" | tr -s ' ')"
 
-rpmbuild -bb "$WORK/rpmbuild/SPECS/frappista.spec" \
+rpmbuild -bb "$WORK/rpmbuild/SPECS/frappium.spec" \
   --define "_topdir $WORK/rpmbuild" \
-  --define "frappista_version $VERSION" \
-  --define "frappista_arch $RPM_ARCH" \
+  --define "frappium_version $VERSION" \
+  --define "frappium_arch $RPM_ARCH" \
   --define "python_xy $PYTHON_XY" \
   --define "runtime_requires $RUNTIME_REQUIRES" \
   --define "distro_tag $DISTRO_TAG" \
@@ -107,5 +107,5 @@ mkdir -p "$OUTPUT_DIR"
 find "$WORK/rpmbuild/RPMS" -name '*.rpm' -exec cp -v {} "$OUTPUT_DIR/" \;
 
 echo "==> built:"
-find "$OUTPUT_DIR" -name "frappista-${VERSION}-*.rpm" -newer "$META" -print0 2>/dev/null \
+find "$OUTPUT_DIR" -name "frappium-${VERSION}-*.rpm" -newer "$META" -print0 2>/dev/null \
   | xargs -0 -r ls -lh

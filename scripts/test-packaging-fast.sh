@@ -27,7 +27,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/frappista-fast.XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/frappium-fast.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
 PASS=0; FAIL=0
@@ -37,7 +37,7 @@ try()  { if eval "$2" >/dev/null 2>&1; then ok "$1"; else bad "$1"; fi; }
 
 echo "==> static checks"
 
-for f in "$ROOT"/scripts/*.sh "$ROOT"/scripts/lib/*.sh "$ROOT"/scripts/templates/frappista-setup \
+for f in "$ROOT"/scripts/*.sh "$ROOT"/scripts/lib/*.sh "$ROOT"/scripts/templates/frappium-setup \
          "$ROOT"/snap/local/bin/*; do
   [ -f "$f" ] || continue
   case "$f" in *.json|*.template) continue ;; esac
@@ -47,7 +47,7 @@ ok "shell syntax (all scripts)"
 
 if command -v shellcheck >/dev/null 2>&1; then
   if shellcheck -S warning "$ROOT"/scripts/*.sh "$ROOT"/scripts/lib/*.sh \
-       "$ROOT"/scripts/templates/frappista-setup 2>/dev/null; then
+       "$ROOT"/scripts/templates/frappium-setup 2>/dev/null; then
     ok "shellcheck (warning level)"
   else
     bad "shellcheck (warning level)"
@@ -84,13 +84,13 @@ echo "==> synthetic payload"
 # Minimal tree containing exactly what the stager asserts, and nothing else.
 SP="$WORK/payload"
 mkdir -p "$SP/opt/frappe-bench"/{env/bin,node/bin,sites,config/pids,logs,apps} \
-         "$SP/usr/lib/frappista/python/bin"
+         "$SP/usr/lib/frappium/python/bin"
 for b in opt/frappe-bench/env/bin/bench opt/frappe-bench/env/bin/gunicorn \
-         opt/frappe-bench/node/bin/node usr/lib/frappista/python/bin/python3.14; do
+         opt/frappe-bench/node/bin/node usr/lib/frappium/python/bin/python3.14; do
   printf '#!/bin/sh\nexit 0\n' > "$SP/$b"; chmod +x "$SP/$b"
 done
 printf 'frappe\n' > "$SP/opt/frappe-bench/sites/apps.txt"
-tar -C "$SP" -czf "$WORK/payload.tar.gz" opt/frappe-bench usr/lib/frappista
+tar -C "$SP" -czf "$WORK/payload.tar.gz" opt/frappe-bench usr/lib/frappium
 ok "synthetic payload built"
 
 # shellcheck source=scripts/lib/stage-native-root.sh
@@ -129,7 +129,7 @@ for family in debian rhel; do
   fi
 
   MISSING=""
-  for f in frappista.target frappe-web.service 'frappe-worker@.service' \
+  for f in frappium.target frappe-web.service 'frappe-worker@.service' \
            frappe-scheduler.service frappe-socketio.service; do
     [ -f "$UNIT_DIR/$f" ] || MISSING="$MISSING $f"
   done
@@ -146,10 +146,10 @@ for family in debian rhel; do
                    || bad "$family: every ExecStart binary is shipped" "$BADBIN"
 
   try "$family: mariadb drop-in installed" "test -f '$CNF'"
-  try "$family: frappista-setup installed" "test -x '$DEST/usr/bin/frappista-setup'"
-  try "$family: bundled python shipped" "test -x '$DEST/usr/lib/frappista/python/bin/python3.14'"
+  try "$family: frappium-setup installed" "test -x '$DEST/usr/bin/frappium-setup'"
+  try "$family: bundled python shipped" "test -x '$DEST/usr/lib/frappium/python/bin/python3.14'"
 
-  TPL="$DEST/etc/frappista/nginx/frappe.conf.template"
+  TPL="$DEST/etc/frappium/nginx/frappe.conf.template"
   try "$family: vhost document root is templated" "grep -q 'root \${BENCH_SITES};' '$TPL'"
   try "$family: vhost listen port is templated"   "grep -q 'listen \${NGINX_PORT};' '$TPL'"
   try "$family: vhost drops the container path"   "! grep -q '/home/frappe/frappe-bench' '$TPL'"
@@ -172,16 +172,16 @@ if command -v rpmspec >/dev/null 2>&1; then
   # Native arch, not a hardcoded one: rpmspec rejects a BuildArch it cannot
   # build ("No compatible architectures found for build"), so a hardcoded x86_64
   # makes this test fail on every arm64 machine for a reason unrelated to the spec.
-  if rpmspec --parse "$ROOT/packaging/frappista.spec" \
-       --define "frappista_version 0.0.0" --define "frappista_arch $(uname -m)" \
+  if rpmspec --parse "$ROOT/packaging/frappium.spec" \
+       --define "frappium_version 0.0.0" --define "frappium_arch $(uname -m)" \
        --define "python_xy 3.14" --define "distro_tag test" \
        --define "frappe_branch version-16" --define "runtime_requires glibc" \
        >/dev/null 2>&1; then
-    ok "frappista.spec parses"
+    ok "frappium.spec parses"
   else
-    bad "frappista.spec parses" \
-        "$(rpmspec --parse "$ROOT/packaging/frappista.spec" \
-             --define "frappista_version 0.0.0" --define "frappista_arch $(uname -m)" \
+    bad "frappium.spec parses" \
+        "$(rpmspec --parse "$ROOT/packaging/frappium.spec" \
+             --define "frappium_version 0.0.0" --define "frappium_arch $(uname -m)" \
              --define "python_xy 3.14" --define "distro_tag test" \
              --define "frappe_branch version-16" --define "runtime_requires glibc" 2>&1 | tail -3)"
   fi

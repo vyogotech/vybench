@@ -55,8 +55,8 @@ fi
 echo "==> testing $(basename "$PKG") on $DISTRO"
 
 SLUG="$(echo "$DISTRO" | tr ':/' '--')"
-IMAGE="frappista-test:$SLUG"
-NAME="frappista-test-$SLUG-$$"
+IMAGE="frappium-test:$SLUG"
+NAME="frappium-test-$SLUG-$$"
 
 # ---------------------------------------------------------------------------
 # A systemd-capable image
@@ -64,7 +64,7 @@ NAME="frappista-test-$SLUG-$$"
 # The units are the deliverable, so the test has to boot systemd -- checking the
 # binaries by hand would pass on exactly the package that fails at boot. Debian
 # and Ubuntu base images ship no init at all, so one gets installed here.
-BUILD_CTX="$(mktemp -d "${TMPDIR:-/tmp}/frappista-testimg.XXXXXX")"
+BUILD_CTX="$(mktemp -d "${TMPDIR:-/tmp}/frappium-testimg.XXXXXX")"
 trap 'rm -rf "$BUILD_CTX"' EXIT
 
 if [ "$FAMILY" = "debian" ]; then
@@ -189,9 +189,9 @@ check "bench is not world-writable" \
 # systemd versions in this matrix.
 check "units carry no placeholders" '
   ! grep -l "@[A-Z_]*@" /lib/systemd/system/frappe*.service \
-      /lib/systemd/system/frappista.target \
+      /lib/systemd/system/frappium.target \
       /usr/lib/systemd/system/frappe*.service \
-      /usr/lib/systemd/system/frappista.target 2>/dev/null | grep -q .
+      /usr/lib/systemd/system/frappium.target 2>/dev/null | grep -q .
 '
 check "every ExecStart binary exists" '
   set -e
@@ -209,11 +209,11 @@ check "bench subcommands load" \
 # ---------------------------------------------------------------------------
 # Setup
 # ---------------------------------------------------------------------------
-echo "==> frappista-setup"
+echo "==> frappium-setup"
 # Non-interactive by construction: if the database administrator account were
 # not provisioned first, `bench new-site` would call getpass() and die with
 # EOFError right here.
-x "frappista-setup --site $SITE --admin-password $ADMIN_PW"
+x "frappium-setup --site $SITE --admin-password $ADMIN_PW"
 
 echo "==> post-setup checks"
 

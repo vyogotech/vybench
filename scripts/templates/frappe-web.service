@@ -1,10 +1,10 @@
 [Unit]
 Description=Frappe web server (gunicorn)
-Documentation=https://github.com/vyogotech/frappista
+Documentation=https://github.com/vyogotech/frappium
 After=network-online.target @MARIADB_SVC@ @REDIS_SVC@
 Wants=network-online.target
 Requires=@MARIADB_SVC@ @REDIS_SVC@
-PartOf=frappista.target
+PartOf=frappium.target
 
 [Service]
 Type=simple
@@ -20,7 +20,7 @@ Environment=FRAPPE_WEB_BIND=127.0.0.1:8000
 Environment=FRAPPE_WEB_WORKERS=4
 Environment=FRAPPE_WEB_THREADS=4
 Environment=FRAPPE_WEB_TIMEOUT=120
-EnvironmentFile=-/etc/frappista/frappista.env
+EnvironmentFile=-/etc/frappium/frappium.env
 
 # gunicorn must run from sites/, which is how frappe locates
 # common_site_config.json and the per-site directories.
@@ -28,7 +28,7 @@ WorkingDirectory=@BENCH@/sites
 
 # frappe.app:application serves NO static files. That is correct here and only
 # here: unlike the snap, a native install has a real nginx in front (see
-# frappista-setup), which serves /assets and /files straight off disk. If you
+# frappium-setup), which serves /assets and /files straight off disk. If you
 # disable nginx you must put something else in front, or every asset 404s.
 ExecStart=@BENCH@/env/bin/gunicorn \
     --bind ${FRAPPE_WEB_BIND} \

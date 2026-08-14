@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the Frappista .deb from a bench payload.
+# Build the Frappium .deb from a bench payload.
 #
 # This does NOT build the bench. Run scripts/build-bench-payload.sh first, in a
 # container of the distribution you are targeting -- the payload links against
@@ -74,16 +74,16 @@ UPSTREAM="${VERSION//-/.}"
 DISTRO_TAG="$(echo "$DISTRO" | tr -d ':.' )"
 FULL_VERSION="${UPSTREAM}-1~${DISTRO_TAG}"
 
-STAGING="$(mktemp -d "${TMPDIR:-/tmp}/frappista-deb.XXXXXX")"
+STAGING="$(mktemp -d "${TMPDIR:-/tmp}/frappium-deb.XXXXXX")"
 trap 'rm -rf "$STAGING"' EXIT
 
-echo "==> building frappista ${FULL_VERSION} (${DEB_ARCH}) for ${DISTRO}"
+echo "==> building frappium ${FULL_VERSION} (${DEB_ARCH}) for ${DISTRO}"
 stage_native_root "$STAGING" debian "$PAYLOAD"
 
 mkdir -p "$STAGING/DEBIAN" "$OUTPUT_DIR"
 
 # No python3 dependency: frappe v16 requires exactly 3.14, which no Debian or
-# Ubuntu release ships, so the interpreter is bundled at /usr/lib/frappista/python
+# Ubuntu release ships, so the interpreter is bundled at /usr/lib/frappium/python
 # and the package does not use the system python at all.
 #
 # It does link against this release's OpenSSL, libffi, sqlite and so on. Those
@@ -100,17 +100,16 @@ done
 INSTALLED_SIZE="$(du -sk "$STAGING" | cut -f1)"
 
 cat > "$STAGING/DEBIAN/control" <<EOF
-Package: frappista
+Package: frappium
 Version: ${FULL_VERSION}
 Architecture: ${DEB_ARCH}
 Maintainer: Vyogo Labs <dev@vyogolabs.tech>
 Installed-Size: ${INSTALLED_SIZE}
 Section: admin
 Priority: optional
-Homepage: https://github.com/vyogotech/frappista
-Provides: frappista-bench
-Replaces: frappista-bench
-Conflicts: frappista-bench
+Homepage: https://github.com/vyogotech/frappium
+Replaces: frappista, frappista-bench, frappium-bench
+Conflicts: frappista, frappista-bench, frappium-bench
 Depends: mariadb-server (>= 10.6),
  mariadb-client,
  redis-server (>= 6.0),
@@ -132,12 +131,12 @@ Description: Frappe Framework and ERPNext, packaged for Debian and Ubuntu
  and no Debian or Ubuntu release ships it.
  Built for ${DISTRO}; frappe ${FRAPPE_VERSION}.
  .
- Run 'frappista-setup' after installing to create the database account, the
+ Run 'frappium-setup' after installing to create the database account, the
  first site and the nginx vhost.
 EOF
 
 cat > "$STAGING/DEBIAN/conffiles" <<'EOF'
-/etc/frappista/frappista.env
+/etc/frappium/frappium.env
 /etc/mysql/mariadb.conf.d/10-frappe.cnf
 EOF
 
@@ -175,7 +174,7 @@ if [ "$1" = "configure" ]; then
   chmod -R ug+rwX,o-rwx "$BENCH"
   # Nothing here is world-readable: sites/*/private holds uploaded documents and
   # site_config.json holds the database password. nginx gets access by being put
-  # in the frappe group (frappista-setup does that), not by opening the tree up.
+  # in the frappe group (frappium-setup does that), not by opening the tree up.
 
   # Everyone expects `bench`. Only claim the name if it is free -- a
   # pip-installed frappe-bench in /usr/local/bin is a real and common setup, and
@@ -188,9 +187,9 @@ if [ "$1" = "configure" ]; then
 
   cat <<'MSG'
 
-Frappista is installed but not yet configured.
+Frappium is installed but not yet configured.
 
-  sudo frappista-setup --site dev.localhost --admin-password admin
+  sudo frappium-setup --site dev.localhost --admin-password admin
 
 That creates the database account, the site, the nginx vhost, and starts the
 services. Nothing is started before you run it.
@@ -209,10 +208,10 @@ if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
   # did not start them exclusively for itself and other things may use them.
   systemctl stop 'frappe-worker@*.service' >/dev/null 2>&1 || true
   systemctl stop frappe-web.service frappe-scheduler.service \
-                 frappe-socketio.service frappista.target >/dev/null 2>&1 || true
+                 frappe-socketio.service frappium.target >/dev/null 2>&1 || true
   systemctl disable 'frappe-worker@*.service' >/dev/null 2>&1 || true
   systemctl disable frappe-web.service frappe-scheduler.service \
-                    frappe-socketio.service frappista.target >/dev/null 2>&1 || true
+                    frappe-socketio.service frappium.target >/dev/null 2>&1 || true
 fi
 
 exit 0
@@ -229,13 +228,13 @@ case "$1" in
       rm -f /usr/local/bin/bench
     fi
 
-    # frappista-setup wrote this; dpkg does not know about it.
+    # frappium-setup wrote this; dpkg does not know about it.
     if [ -f /etc/nginx/conf.d/frappe.conf ]; then
       rm -f /etc/nginx/conf.d/frappe.conf
       # Put back whatever we retired to make room for it.
-      if [ -e /etc/nginx/sites-available/default.frappista-disabled ] && \
+      if [ -e /etc/nginx/sites-available/default.frappium-disabled ] && \
          [ ! -e /etc/nginx/sites-enabled/default ]; then
-        mv /etc/nginx/sites-available/default.frappista-disabled \
+        mv /etc/nginx/sites-available/default.frappium-disabled \
            /etc/nginx/sites-enabled/default
       fi
       systemctl reload nginx >/dev/null 2>&1 || true
@@ -266,7 +265,7 @@ command -v dpkg-deb >/dev/null 2>&1 || {
   trap - EXIT; exit 1; }
 
 mkdir -p "$OUTPUT_DIR"
-PKG="$OUTPUT_DIR/frappista_${FULL_VERSION}_${DEB_ARCH}.deb"
+PKG="$OUTPUT_DIR/frappium_${FULL_VERSION}_${DEB_ARCH}.deb"
 echo "==> dpkg-deb --build"
 # --root-owner-group forces 0:0 ownership regardless of who runs the build;
 # without it a non-root build bakes in the builder's uid.

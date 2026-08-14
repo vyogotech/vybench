@@ -22,7 +22,7 @@ rpm:
 	./scripts/package-rpm.sh --output ./dist
 
 snap:
-	mkdir -p dist && snapcraft pack --output=dist/frappista_amd64.snap
+	mkdir -p dist && snapcraft pack --output=dist/frappium_amd64.snap
 
 test:
 	./scripts/test-native-package.sh --distro "$(DISTRO)"

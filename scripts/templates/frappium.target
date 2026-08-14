@@ -1,9 +1,9 @@
 [Unit]
 # Grouping target so the whole application tier can be handled as one unit:
-#   systemctl start|stop|restart frappista.target
-# Every frappe-* unit declares PartOf=frappista.target, so stopping the target
+#   systemctl start|stop|restart frappium.target
+# Every frappe-* unit declares PartOf=frappium.target, so stopping the target
 # stops all of them; each is still individually enable/disable-able.
-Description=Frappista (Frappe/ERPNext) application stack
+Description=Frappium (Frappe/ERPNext) application stack
 Requires=@MARIADB_SVC@ @REDIS_SVC@
 After=@MARIADB_SVC@ @REDIS_SVC@
 

@@ -2,7 +2,7 @@
 
 Ship Frappe v16 as native distribution packages for Debian/Ubuntu (`.deb`) and
 Fedora/RHEL (`.rpm`), reusing the service topology and the defect fixes proven
-while building the `frappista` snap.
+while building the `frappium` snap.
 
 ---
 
@@ -125,7 +125,7 @@ from.) **No distribution in the matrix ships 3.14:**
 | RHEL / Rocky 9 | 3.9 (3.11 available) | no |
 
 So the interpreter is **bundled**: `build-bench-payload.sh` compiles CPython 3.14
-from source into `/usr/lib/frappista/python` inside the build container, and the
+from source into `/usr/lib/frappium/python` inside the build container, and the
 package ships it. The alternative — depending on the deadsnakes PPA — is not
 acceptable for a distribution package.
 
@@ -134,7 +134,7 @@ Three consequences worth stating plainly:
 1. **It is not installed under `/opt/frappe-bench`.** `bench init` refuses a
    non-empty target directory (verified: `ERROR: Bench instance already exists`),
    and the interpreter must already exist at its final path when the venv is
-   created, because that path is what `pyvenv.cfg` records. `/usr/lib/frappista`
+   created, because that path is what `pyvenv.cfg` records. `/usr/lib/frappium`
    is the FHS-correct home for a package-owned private runtime.
 2. **Built without `--enable-shared`,** so libpython is linked into the binary.
    It therefore needs no `LD_LIBRARY_PATH` and cannot bind to a different
@@ -216,7 +216,7 @@ here nginx reads `/assets` and `/files` straight off disk. With `o-rwx` on the
 bench it cannot, and every asset 403s. The fix is *not* to open the tree up:
 `sites/*/private` holds uploaded documents and `site_config.json` holds the
 database password, and the vhost's `internal;` directive is an nginx-level
-restriction, not a filesystem one. `frappista-setup` adds nginx's own account
+restriction, not a filesystem one. `frappium-setup` adds nginx's own account
 (`www-data` or `nginx`, read from `nginx.conf`) to the `frappe` group instead.
 
 It must then **restart** nginx, not reload it: supplementary groups are read at
@@ -227,7 +227,7 @@ the 403s persist — with a config that looks completely correct.
 password-authenticated account that can `CREATE DATABASE` and `GRANT`. Giving
 MariaDB's `root` a password would satisfy that and break `mysql` for the system
 administrator, because on both families `root` authenticates via `unix_socket`.
-So `frappista-setup` creates a dedicated account and records it as
+So `frappium-setup` creates a dedicated account and records it as
 `root_login` / `root_password` (and `db_root_username`, which newer bench reads).
 This is strictly better than what the snap does, where the generated password
 *is* the MariaDB root password.
@@ -244,13 +244,13 @@ All present.
 | `scripts/lib/stage-native-root.sh` | Shared staging: both packages ship the *same* filesystem, so the layout lives in one place rather than drifting between two packagers |
 | `scripts/package-deb.sh` | Rewritten — ships the payload, generates `control`/`postinst`/`prerm`/`postrm` |
 | `scripts/package-rpm.sh` | Stages the root, tars it as `Source0`, drives `rpmbuild` |
-| `packaging/frappista.spec` | RPM spec with `%pre`/`%post`/`%preun`/`%postun` |
+| `packaging/frappium.spec` | RPM spec with `%pre`/`%post`/`%preun`/`%postun` |
 | `scripts/templates/frappe-web.service` | Rewritten — `EnvironmentFile`, hardening, `PartOf` |
 | `scripts/templates/frappe-worker@.service` | Template unit replacing the single-queue file |
 | `scripts/templates/frappe-scheduler.service` | New |
 | `scripts/templates/frappe-socketio.service` | New |
-| `scripts/templates/frappista.target` | New — start/stop the application tier as one unit |
-| `scripts/templates/frappista-setup` | New — first-run: DB account, site, nginx, services |
+| `scripts/templates/frappium.target` | New — start/stop the application tier as one unit |
+| `scripts/templates/frappium-setup` | New — first-run: DB account, site, nginx, services |
 | `scripts/templates/common_site_config.json` | New — static config baked into the payload *and* shipped, so the two cannot disagree |
 | `scripts/test-native-package.sh` | New — installs the built package in a clean systemd container and asserts §8 |
 | `docs/native-install.md` | New — the user-facing guide |
@@ -270,7 +270,7 @@ artefact must be installed in a clean container of its target distribution and c
 
 This is automated as `scripts/test-native-package.sh`, which builds a
 systemd-capable image of the target distribution, boots it, installs the package,
-runs `frappista-setup`, and asserts everything below plus the payload-completeness
+runs `frappium-setup`, and asserts everything below plus the payload-completeness
 and placeholder checks. CI runs it for every row of the matrix. What it does, by
 hand:
 
@@ -336,7 +336,7 @@ None of these were visible by reading the code, which is the whole argument for
 
 ### 8.2 Verified result
 
-`frappista_16.31.0-1~ubuntu2404_arm64.deb` (533 MB, frappe 16.31.0 **+ erpnext**,
+`frappium_16.31.0-1~ubuntu2404_arm64.deb` (533 MB, frappe 16.31.0 **+ erpnext**,
 bundled CPython 3.14.7) passes all 26 checks on a clean `ubuntu:24.04` systemd
 container: site created non-interactively with every shipped app installed into
 it, all six units active, nothing running as root, nginx serving both the desk
@@ -345,6 +345,6 @@ and `/assets` at 200, and all three worker queues executing jobs.
 Adding ERPNext surfaced one more silent failure, in the same family as the
 original ten: `bench new-site` installs **frappe only**. A package advertising
 ERPNext would otherwise deliver a bare Frappe desk, with the app present on disk,
-absent from the site, and no error logged anywhere. `frappista-setup` now
+absent from the site, and no error logged anywhere. `frappium-setup` now
 installs every app listed in `sites/apps.txt`, and the suite asserts
 `bench list-apps` covers them.

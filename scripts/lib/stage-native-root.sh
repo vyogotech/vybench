@@ -14,7 +14,7 @@
 BENCH_DIR=/opt/frappe-bench
 # Where build-bench-payload.sh installs the bundled CPython 3.14. Kept in sync
 # with that script; both packagers assert it is present.
-PYTHON_HOME=/usr/lib/frappista/python
+PYTHON_HOME=/usr/lib/frappium/python
 
 stage_native_root() {
   local dest="$1" family="$2" payload="$3"
@@ -53,10 +53,10 @@ stage_native_root() {
 
   rm -rf "$dest"
   mkdir -p "$dest$unit_dir" \
-           "$dest/etc/frappista/nginx" \
+           "$dest/etc/frappium/nginx" \
            "$dest$mariadb_cnf_dir" \
            "$dest/usr/bin" \
-           "$dest/usr/share/doc/frappista"
+           "$dest/usr/share/doc/frappium"
 
   # --- 1. the bench itself -------------------------------------------------
   echo "==> unpacking payload into $dest"
@@ -89,7 +89,7 @@ stage_native_root() {
   # redis unit name) and the two that are layout constants, so the shipped units
   # contain no placeholders at all.
   local unit
-  for unit in frappista.target frappe-web.service 'frappe-worker@.service' \
+  for unit in frappium.target frappe-web.service 'frappe-worker@.service' \
               frappe-scheduler.service frappe-socketio.service; do
     sed -e "s|@BENCH@|$BENCH_DIR|g" \
         -e "s|@MARIADB_SVC@|$mariadb_svc|g" \
@@ -132,7 +132,7 @@ stage_native_root() {
 #   ${src_tpl#"$root_dir/"}
 # (the same template the container images use), with two substitutions: the
 # document root and the listen port become variables. Rendered to
-# /etc/nginx/conf.d/frappe.conf by \`frappista-setup\`.
+# /etc/nginx/conf.d/frappe.conf by \`frappium-setup\`.
 #
 # Change that template, not this file. If it is a vendored copy, keep it in sync
 # with scripts/check-nginx-template-drift.sh.
@@ -142,23 +142,23 @@ EOF
     sed -e 's|^\( *\)root /home/frappe/frappe-bench/sites;|\1root ${BENCH_SITES};|' \
         -e 's|^\( *\)listen [0-9][0-9]*;|\1listen ${NGINX_PORT};|' \
         "$src_tpl"
-  } > "$dest/etc/frappista/nginx/frappe.conf.template"
+  } > "$dest/etc/frappium/nginx/frappe.conf.template"
 
   # A silent no-op sed here would ship a vhost serving the container's paths.
-  grep -q 'root \${BENCH_SITES};'  "$dest/etc/frappista/nginx/frappe.conf.template" || {
+  grep -q 'root \${BENCH_SITES};'  "$dest/etc/frappium/nginx/frappe.conf.template" || {
     echo "FATAL: nginx template root substitution did not apply" >&2; return 1; }
-  grep -q 'listen \${NGINX_PORT};' "$dest/etc/frappista/nginx/frappe.conf.template" || {
+  grep -q 'listen \${NGINX_PORT};' "$dest/etc/frappium/nginx/frappe.conf.template" || {
     echo "FATAL: nginx template listen substitution did not apply" >&2; return 1; }
 
   # --- 4. mariadb tuning ---------------------------------------------------
   install -m 644 "$tpl/mariadb-frappe.cnf" "$dest$mariadb_cnf_dir/10-frappe.cnf"
 
   # --- 5. setup tool + operator overrides ---------------------------------
-  install -m 755 "$tpl/frappista-setup" "$dest/usr/bin/frappista-setup"
+  install -m 755 "$tpl/frappium-setup" "$dest/usr/bin/frappium-setup"
 
-  cat > "$dest/etc/frappista/frappista.env" <<EOF
+  cat > "$dest/etc/frappium/frappium.env" <<EOF
 # Overrides for the frappe-* systemd units. Uncomment, edit, then:
-#   systemctl daemon-reload && systemctl restart frappista.target
+#   systemctl daemon-reload && systemctl restart frappium.target
 #
 # Bind gunicorn somewhere else. Keep it on loopback unless nothing is proxying
 # in front of it -- frappe.app:application has no authentication of its own
@@ -168,10 +168,10 @@ EOF
 #FRAPPE_WEB_THREADS=4
 #FRAPPE_WEB_TIMEOUT=120
 EOF
-  chmod 644 "$dest/etc/frappista/frappista.env"
+  chmod 644 "$dest/etc/frappium/frappium.env"
 
   install -m 644 "$root_dir/docs/native-install.md" \
-                 "$dest/usr/share/doc/frappista/native-install.md" 2>/dev/null || true
+                 "$dest/usr/share/doc/frappium/native-install.md" 2>/dev/null || true
 
   echo "==> staged $(du -sh "$dest" | cut -f1) into $dest"
 }

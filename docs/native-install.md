@@ -1,4 +1,4 @@
-# Frappista — Native `.deb` / `.rpm` Installation
+# Frappium — Native `.deb` / `.rpm` Installation
 
 Frappe v16 and ERPNext as a distribution package: the bench, its virtualenv, its
 prebuilt assets and a bundled Python 3.14, plus systemd units for the web server,
@@ -21,10 +21,10 @@ artefact everywhere.
 
 | Distribution | Package |
 | :--- | :--- |
-| Ubuntu 24.04 | `frappista_16.0.0-1~ubuntu2404_amd64.deb` |
-| Debian 12 | `frappista_16.0.0-1~debian12_amd64.deb` |
-| Rocky / Alma / RHEL 9 | `frappista-16.0.0-1.rockylinux9.el9.x86_64.rpm` |
-| Fedora 41+ | `frappista-16.0.0-1.fedora41.fc41.x86_64.rpm` |
+| Ubuntu 24.04 | `frappium_16.0.0-1~ubuntu2404_amd64.deb` |
+| Debian 12 | `frappium_16.0.0-1~debian12_amd64.deb` |
+| Rocky / Alma / RHEL 9 | `frappium-16.0.0-1.rockylinux9.el9.x86_64.rpm` |
+| Fedora 41+ | `frappium-16.0.0-1.fedora41.fc41.x86_64.rpm` |
 
 `arm64` / `aarch64` builds exist for the same set. The distribution appears in
 the version, so the file you have always says which build it is — `dpkg -l` and
@@ -33,7 +33,7 @@ the version, so the file you have always says which build it is — `dpkg -l` an
 **Python is bundled.** Frappe v16 requires exactly Python 3.14
 (`requires-python = ">=3.14,<3.15"`), and no distribution here ships it — Ubuntu
 24.04 has 3.12, Debian 12 has 3.11, Fedora 41 has 3.13, RHEL 9 has 3.9. So the
-package carries its own interpreter at `/usr/lib/frappista/python` and does not
+package carries its own interpreter at `/usr/lib/frappium/python` and does not
 touch the system `python3`. Your distribution's Python is left entirely alone.
 
 That interpreter is still compiled against the release's own OpenSSL and sqlite,
@@ -45,10 +45,10 @@ which is why the package is release-specific even though Python travels with it.
 
 ```bash
 # Debian / Ubuntu
-sudo apt install ./frappista_16.0.0-1~ubuntu2404_amd64.deb
+sudo apt install ./frappium_16.0.0-1~ubuntu2404_amd64.deb
 
 # Fedora / RHEL / Rocky
-sudo dnf install ./frappista-16.0.0-1.rockylinux9.el9.x86_64.rpm
+sudo dnf install ./frappium-16.0.0-1.rockylinux9.el9.x86_64.rpm
 ```
 
 Installing does **not** start anything. It unpacks the bench, creates the
@@ -60,7 +60,7 @@ decisions, not side effects of `apt install`.
 ## 3. Set up
 
 ```bash
-sudo frappista-setup --site dev.localhost --admin-password admin
+sudo frappium-setup --site dev.localhost --admin-password admin
 ```
 
 That single command:
@@ -121,9 +121,9 @@ systems without an `/etc/hosts` entry; from another machine, point real DNS at
 the server or add the entry there.
 
 > [!NOTE]
-> On Debian and Ubuntu, `frappista-setup` retires the stock nginx site by moving
+> On Debian and Ubuntu, `frappium-setup` retires the stock nginx site by moving
 > `/etc/nginx/sites-enabled/default` to
-> `/etc/nginx/sites-available/default.frappista-disabled`. It holds
+> `/etc/nginx/sites-available/default.frappium-disabled`. It holds
 > `default_server` on port 80, so Frappe would never receive a request while it
 > is enabled. This is what `bench setup production` does too. Removing the
 > package puts it back.
@@ -144,7 +144,7 @@ the server or add the entry there.
 ```bash
 systemctl status frappe-web frappe-scheduler frappe-socketio
 systemctl status 'frappe-worker@*'
-systemctl restart frappista.target      # everything at once
+systemctl restart frappium.target      # everything at once
 journalctl -u frappe-web -f
 ```
 
@@ -157,7 +157,7 @@ sudo systemctl enable --now frappe-worker@myqueue
 
 ### Tuning
 
-`/etc/frappista/frappista.env` is a conffile read by every unit:
+`/etc/frappium/frappium.env` is a conffile read by every unit:
 
 ```bash
 FRAPPE_WEB_WORKERS=8
@@ -165,7 +165,7 @@ FRAPPE_WEB_TIMEOUT=300
 ```
 
 ```bash
-sudo systemctl daemon-reload && sudo systemctl restart frappista.target
+sudo systemctl daemon-reload && sudo systemctl restart frappium.target
 ```
 
 ---
@@ -210,7 +210,7 @@ is an ordinary writable bench with intact git checkouts:
 
 ```bash
 sudo -u frappe -H bench update
-sudo systemctl restart frappista.target
+sudo systemctl restart frappium.target
 ```
 
 **The package** — `apt upgrade` / `dnf update` replaces the payload. Anything
@@ -224,7 +224,7 @@ package-upgraded is in whichever state the package shipped.
 ## 8. Removing
 
 ```bash
-sudo apt remove frappista        # or: sudo dnf remove frappista
+sudo apt remove frappium        # or: sudo dnf remove frappium
 ```
 
 Sites, uploaded files and the MariaDB databases are **not** removed, on remove

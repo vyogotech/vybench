@@ -13,7 +13,7 @@ if [ ! -f "Procfile" ] && [ ! -d "sites" ]; then
 fi
 
 # Normally this already runs as the invoking host user and run_as_daemon is a
-# plain exec. It only drops privileges when someone runs `sudo frappista.bench`,
+# plain exec. It only drops privileges when someone runs `sudo frappium.bench`,
 # which bench would otherwise refuse to do.
 run_as_daemon "$BENCH_PY" \
   "$BENCH_CLI" "$@"
