@@ -102,13 +102,18 @@ jobs:
         # arm64 is opt-in: GitHub's arm64 runners are not available to private
         # repositories on the Free plan, and an unavailable label queues forever
         # rather than failing fast.
-        include:
-          - arch: amd64
-            runner: ubuntu-24.04
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-        exclude:
-          - arch: ${{ (inputs.include_arm64 || startsWith(github.ref, 'refs/tags/')) && 'none' || 'arm64' }}
+        #
+        # Built with fromJSON rather than include + a computed `exclude`. That
+        # earlier form produced ZERO combinations -- `exclude` filters the base
+        # matrix, and a matrix defined purely by `include` has no base -- so the
+        # whole snap job silently disappeared from the run and `publish-snap`
+        # skipped because its `needs` never existed. No error, just no job.
+        include: >-
+          ${{ fromJSON(
+            (inputs.include_arm64 || startsWith(github.ref, 'refs/tags/'))
+            && '[{"arch":"amd64","runner":"ubuntu-24.04"},{"arch":"arm64","runner":"ubuntu-24.04-arm"}]'
+            || '[{"arch":"amd64","runner":"ubuntu-24.04"}]'
+          ) }}
     steps:
       - uses: actions/checkout@v4
 
