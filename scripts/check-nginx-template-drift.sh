@@ -38,8 +38,18 @@ if [ -z "${VENDORED:-}" ]; then
   fi
 fi
 
-# Where the canonical version lives. Override for a private repository.
-UPSTREAM_URL="${UPSTREAM_URL:-https://raw.githubusercontent.com/vyogotech/frappista/version-16/upload/src/nginx/frappe.conf.template}"
+# Where the canonical version lives. Deliberately EMPTY by default.
+#
+# At the time of the split the images repository did not track upload/ at all --
+# those files are untracked there, so the "canonical" template exists only as a
+# local file on one machine and no URL resolves to it. A hardcoded default here
+# pointed at a 404 and would have failed CI for a reason having nothing to do
+# with drift.
+#
+# No upstream configured therefore means "the vendored copy is authoritative":
+# this check says so and passes. Set UPSTREAM_URL once the template is committed
+# somewhere fetchable and the check starts doing real work.
+UPSTREAM_URL="${UPSTREAM_URL:-}"
 
 MODE=compare
 LOCAL_PATH=""
@@ -57,6 +67,24 @@ done
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/nginx-drift.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 UPSTREAM="$TMP/upstream.template"
+
+if [ -z "$LOCAL_PATH" ] && [ -z "$UPSTREAM_URL" ]; then
+  cat <<EOF
+==> no upstream configured; treating the vendored template as authoritative
+      $VENDORED
+
+    The images repository does not publish this file (upload/ is untracked
+    there), so there is nothing to compare against yet. To enable the real
+    check, commit the template somewhere fetchable and set:
+
+      UPSTREAM_URL=https://raw.githubusercontent.com/<owner>/<repo>/<ref>/upload/src/nginx/frappe.conf.template
+
+    or compare against a local checkout:
+
+      $(basename "$0") --local /path/to/frappe.conf.template
+EOF
+  exit 0
+fi
 
 if [ -n "$LOCAL_PATH" ]; then
   [ -f "$LOCAL_PATH" ] || { echo "FATAL: --local '$LOCAL_PATH' not found" >&2; exit 1; }

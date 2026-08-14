@@ -38,12 +38,18 @@ are in [docs/native-packaging-plan.md](docs/native-packaging-plan.md).
 `upload/src/nginx/frappe.conf.template`. The two must agree on how `/assets`,
 `/files`, `/socket.io` and the X-Accel-Redirect handoff are routed.
 
+**Right now this copy is authoritative.** The images repository does not track
+`upload/` — it is untracked there, so no URL resolves to the original and this is
+the only version-controlled copy that exists.
+
 ```bash
-scripts/check-nginx-template-drift.sh            # CI runs this
+scripts/check-nginx-template-drift.sh            # reports the above, passes
+scripts/check-nginx-template-drift.sh --local /path/to/frappe.conf.template
 scripts/check-nginx-template-drift.sh --update   # adopt an upstream change
 ```
 
-Set `UPSTREAM_URL` (and `GITHUB_TOKEN`, if the images repository is private).
+Once the images repository commits `upload/`, set `UPSTREAM_URL` (and
+`GITHUB_TOKEN` if it is private) and the check starts comparing for real.
 
 ## CI cost
 
