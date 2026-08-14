@@ -1,5 +1,5 @@
 #!/bin/bash
-# Shared bootstrap sourced by every frappium wrapper.
+# Shared bootstrap sourced by every vybench wrapper.
 #
 # snapd starts all services as root. Nothing in this snap is allowed to STAY
 # root: each wrapper calls run_as_daemon, which drops to the snap_daemon system
@@ -10,10 +10,10 @@
 
 DAEMON_USER=snap_daemon
 
-# $SNAP is revision-specific (/snap/frappium/x11). Anything persisted into
+# $SNAP is revision-specific (/snap/vybench/x11). Anything persisted into
 # $SNAP_COMMON and expected to survive a refresh must point at the revision
 # -stable `current` symlink instead, or it dangles after the next upgrade.
-SNAP_STABLE=/snap/frappium/current
+SNAP_STABLE=/snap/vybench/current
 
 # Where the live apps/ and env/ actually are.
 #
@@ -61,7 +61,7 @@ export GIT_CONFIG_KEY_0=safe.directory
 export GIT_CONFIG_VALUE_0='*'
 
 # The tree is shared between the snap_daemon services and the host user who runs
-# `frappium.bench`, and neither can chown the other's files.
+# `vybench.bench`, and neither can chown the other's files.
 #
 # This mirrors the container image's approach (Containerfile: `chown -R 1001:0 .
 # && chmod -R ug+rwX .`) -- shared through GROUP ownership, never world-writable.
@@ -196,7 +196,7 @@ materialise_bench() {
 
   # The venv's interpreter link is relative (../../../../usr/bin/python3.14),
   # which counts four levels from $SNAP/opt/frappe-bench/env/bin but lands on
-  # /var/snap/frappium/usr/bin from the copied location -- a dangling link that
+  # /var/snap/vybench/usr/bin from the copied location -- a dangling link that
   # breaks every bench command. Re-point it absolutely at the bundled interpreter.
   if [ -d "$B/env/bin" ]; then
     ln -sfn "$SNAP_STABLE/usr/bin/python3.14" "$B/env/bin/python3.14"
@@ -225,18 +225,18 @@ require_bench_access() {
   [ -w "$probe" ] && return 0            # already writable -- say nothing
 
   cat >&2 <<EOF
-frappium: the bench at $SNAP_COMMON/bench is owned by '$DAEMON_USER' and is not
+vybench: the bench at $SNAP_COMMON/bench is owned by '$DAEMON_USER' and is not
 writable by $(id -un).
 
 This install is in production mode, where the services own the bench. Either:
 
-  sudo frappium.bench $*
+  sudo vybench.bench $*
       run the command as the service account (no setup needed), or
 
   sudo usermod -aG $DAEMON_USER $(id -un)   # then re-login, or: newgrp $DAEMON_USER
       grant yourself permanent access, like docker's post-install step.
 
-A developer install (snap set frappium mode=developer) needs neither.
+A developer install (snap set vybench mode=developer) needs neither.
 EOF
   return 1
 }
@@ -264,7 +264,7 @@ reexec_as_daemon() {
 }
 
 # Current install mode: "production" (default) or "developer".
-# Set with: snap set frappium mode=developer
+# Set with: snap set vybench mode=developer
 get_mode() {
   local m
   m=$(snapctl get mode 2>/dev/null) || m=""

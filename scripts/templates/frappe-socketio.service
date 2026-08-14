@@ -3,11 +3,11 @@
 # updates, notifications, progress bars and background-job feedback are all
 # dead, and the browser console fills with failed socket.io polls.
 Description=Frappe realtime server (socket.io)
-Documentation=https://github.com/vyogotech/frappium
+Documentation=https://github.com/vyogotech/vybench
 After=network-online.target @REDIS_SVC@
 Wants=network-online.target
 Requires=@REDIS_SVC@
-PartOf=frappium.target
+PartOf=vybench.target
 
 [Service]
 Type=simple
@@ -19,7 +19,7 @@ Environment=HOME=@BENCH@
 # must be started by path from the bench root -- exactly as bench's Procfile
 # does (`socketio: {{ node }} apps/frappe/socketio.js`).
 Environment=NODE_PATH=@BENCH@/apps/frappe/node_modules
-EnvironmentFile=-/etc/frappium/frappium.env
+EnvironmentFile=-/etc/vybench/vybench.env
 
 WorkingDirectory=@BENCH@
 ExecStart=@NODE@ @BENCH@/apps/frappe/socketio.js

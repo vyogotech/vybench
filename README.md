@@ -1,4 +1,4 @@
-# frappium
+# vybench
 
 Frappe v16 / ERPNext, packaged.
 
@@ -73,10 +73,29 @@ so snapcraft fails with *"LXD requires additional permissions"*. `build-info` is
 disabled, so no `snap/manifest.yaml` enumerating the build inputs ships inside a
 private artefact.
 
-**arm64 is opt-in.** GitHub's arm64 runners are unavailable to private
-repositories on the Free plan, and an unavailable runner label queues forever
-instead of failing. Tag builds include it; manual runs need
-`include_arm64: true`.
+### arm64
+
+GitHub's arm64 runners are unavailable to private repositories on the **Free**
+plan, and an unavailable runner label queues forever rather than failing — so
+arm64 is opt-in in CI (`include_arm64: true`; tag builds include it). It starts
+working the moment the org moves to Team.
+
+Until then, build arm64 on Canonical's build farm:
+
+```bash
+make snap-remote        # amd64 + arm64, from snapcraft.yaml's `platforms`
+```
+
+> [!WARNING]
+> `snapcraft remote-build` **uploads the source to Launchpad, where it is
+> public** — snapcraft requires `--launchpad-accept-public-upload` to make that
+> impossible to miss. Visible is not the same as reusable: this repository ships
+> no licence grant, so the packaging code remains all rights reserved. But the
+> decision to publish should be deliberate.
+>
+> The first run authenticates against Launchpad (Ubuntu One) in a browser, so it
+> cannot run unattended in CI without pre-seeded credentials. Run it from a
+> workstation or the build server.
 
 ### Cost
 

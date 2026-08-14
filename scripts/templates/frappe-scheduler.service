@@ -4,14 +4,14 @@
 # perfectly right up until someone notices no email has ever been sent.
 #
 # This process is only half of it. Each site ALSO needs its own scheduler
-# enabled (`bench --site <site> scheduler enable`); frappium-setup does that
+# enabled (`bench --site <site> scheduler enable`); vybench-setup does that
 # when it creates a site.
 Description=Frappe scheduler
-Documentation=https://github.com/vyogotech/frappium
+Documentation=https://github.com/vyogotech/vybench
 After=network-online.target @MARIADB_SVC@ @REDIS_SVC@
 Wants=network-online.target
 Requires=@MARIADB_SVC@ @REDIS_SVC@
-PartOf=frappium.target
+PartOf=vybench.target
 
 [Service]
 Type=simple
@@ -19,7 +19,7 @@ User=frappe
 Group=frappe
 
 Environment=HOME=@BENCH@
-EnvironmentFile=-/etc/frappium/frappium.env
+EnvironmentFile=-/etc/vybench/vybench.env
 
 WorkingDirectory=@BENCH@
 ExecStart=@BENCH@/env/bin/bench schedule

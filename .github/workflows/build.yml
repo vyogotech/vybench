@@ -170,8 +170,8 @@ jobs:
             `snapd`.
 
             ```bash
-            sudo apt install ./frappium_*~ubuntu2404_*.deb
-            sudo frappium-setup --site dev.localhost --admin-password admin
+            sudo apt install ./vybench_*~ubuntu2404_*.deb
+            sudo vybench-setup --site dev.localhost --admin-password admin
             ```
 
             See `docs/native-install.md` and `docs/snap-install.md`.

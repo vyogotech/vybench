@@ -1,4 +1,4 @@
-# Frappium Snap — Installation
+# Vybench Snap — Installation
 
 A self-contained Frappe v16 install for any Linux distribution with `snapd`
 (Fedora, Ubuntu, Debian, Arch, RHEL). Python 3.14, MariaDB 10.11, Redis 7,
@@ -10,13 +10,13 @@ host, so there are no library or OpenSSL conflicts between distributions.
 ## 1. Install
 
 ```bash
-sudo snap install frappium --classic
+sudo snap install vybench --classic
 ```
 
 Local build:
 
 ```bash
-sudo snap install --dangerous --classic frappium_16.0.0_amd64.snap
+sudo snap install --dangerous --classic vybench_16.0.0_amd64.snap
 ```
 
 The install starts MariaDB and Redis, generates a random database root
@@ -25,16 +25,16 @@ required to get a working server.
 
 ---
 
-## 2. Use `bench` instead of `frappium.bench`
+## 2. Use `bench` instead of `vybench.bench`
 
-The snap exposes its CLI as `frappium.bench`. Alias it to the name everyone
+The snap exposes its CLI as `vybench.bench`. Alias it to the name everyone
 expects:
 
 ```bash
-sudo snap alias frappium.bench bench
+sudo snap alias vybench.bench bench
 ```
 
-Check with `snap aliases frappium`; undo with `sudo snap unalias bench`.
+Check with `snap aliases vybench`; undo with `sudo snap unalias bench`.
 
 > If a pip-installed `frappe-bench` is already present, `/usr/local/bin/bench`
 > usually wins over `/snap/bin/bench` in `PATH`. Run `which -a bench` to see
@@ -45,8 +45,8 @@ Check with `snap aliases frappium`; undo with `sudo snap unalias bench`.
 ## 3. Choose an install mode
 
 ```bash
-sudo snap set frappium mode=production   # default
-sudo snap set frappium mode=developer
+sudo snap set vybench mode=production   # default
+sudo snap set vybench mode=developer
 ```
 
 |                         | production                            | developer                        |
@@ -68,7 +68,7 @@ place, so your work is never discarded.
 ## 4. Create a site
 
 ```bash
-cd /var/snap/frappium/common/bench
+cd /var/snap/vybench/common/bench
 bench new-site mysite.localhost --admin-password admin
 ```
 
@@ -116,10 +116,10 @@ a bare permission error.
 ## 6. Optional services
 
 ```bash
-sudo snap set frappium nginx=true          # reverse proxy, production only
-sudo snap set frappium nginx-port=8080     # default 8080
-sudo snap set frappium watch=true          # asset rebuilder, developer only
-sudo snap set frappium bind=0.0.0.0        # expose the web port on the LAN
+sudo snap set vybench nginx=true          # reverse proxy, production only
+sudo snap set vybench nginx-port=8080     # default 8080
+sudo snap set vybench watch=true          # asset rebuilder, developer only
+sudo snap set vybench bind=0.0.0.0        # expose the web port on the LAN
 ```
 
 Nginx is off by default: gunicorn already serves static assets correctly, and
@@ -132,16 +132,16 @@ below 1024.
 ## 7. Everyday commands
 
 ```bash
-snap services frappium                     # what is running
-sudo snap restart frappium.web
-sudo snap logs frappium.web -f
-sudo snap get frappium mode
+snap services vybench                     # what is running
+sudo snap restart vybench.web
+sudo snap logs vybench.web -f
+sudo snap get vybench mode
 
-frappium.mysql -u root -p -S /var/snap/frappium/common/run/mysql.sock
-frappium.redis-cli ping
+vybench.mysql -u root -p -S /var/snap/vybench/common/run/mysql.sock
+vybench.redis-cli ping
 ```
 
-Data lives in `/var/snap/frappium/common`:
+Data lives in `/var/snap/vybench/common`:
 
 | Path            | Contents                                  |
 | --------------- | ----------------------------------------- |
@@ -150,6 +150,6 @@ Data lives in `/var/snap/frappium/common`:
 | `run/`          | MariaDB socket                            |
 | `bench/logs/`   | bench and worker logs                     |
 
-`snap remove frappium` keeps this directory as a snapshot; use
+`snap remove vybench` keeps this directory as a snapshot; use
 `snap remove --purge` to delete it. Back up sites with `bench backup` before
 removing anything.

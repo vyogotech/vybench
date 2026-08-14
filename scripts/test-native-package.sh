@@ -55,8 +55,8 @@ fi
 echo "==> testing $(basename "$PKG") on $DISTRO"
 
 SLUG="$(echo "$DISTRO" | tr ':/' '--')"
-IMAGE="frappium-test:$SLUG"
-NAME="frappium-test-$SLUG-$$"
+IMAGE="vybench-test:$SLUG"
+NAME="vybench-test-$SLUG-$$"
 
 # ---------------------------------------------------------------------------
 # A systemd-capable image
@@ -64,7 +64,7 @@ NAME="frappium-test-$SLUG-$$"
 # The units are the deliverable, so the test has to boot systemd -- checking the
 # binaries by hand would pass on exactly the package that fails at boot. Debian
 # and Ubuntu base images ship no init at all, so one gets installed here.
-BUILD_CTX="$(mktemp -d "${TMPDIR:-/tmp}/frappium-testimg.XXXXXX")"
+BUILD_CTX="$(mktemp -d "${TMPDIR:-/tmp}/vybench-testimg.XXXXXX")"
 trap 'rm -rf "$BUILD_CTX"' EXIT
 
 if [ "$FAMILY" = "debian" ]; then
@@ -189,9 +189,9 @@ check "bench is not world-writable" \
 # systemd versions in this matrix.
 check "units carry no placeholders" '
   ! grep -l "@[A-Z_]*@" /lib/systemd/system/frappe*.service \
-      /lib/systemd/system/frappium.target \
+      /lib/systemd/system/vybench.target \
       /usr/lib/systemd/system/frappe*.service \
-      /usr/lib/systemd/system/frappium.target 2>/dev/null | grep -q .
+      /usr/lib/systemd/system/vybench.target 2>/dev/null | grep -q .
 '
 check "every ExecStart binary exists" '
   set -e
@@ -209,11 +209,11 @@ check "bench subcommands load" \
 # ---------------------------------------------------------------------------
 # Setup
 # ---------------------------------------------------------------------------
-echo "==> frappium-setup"
+echo "==> vybench-setup"
 # Non-interactive by construction: if the database administrator account were
 # not provisioned first, `bench new-site` would call getpass() and die with
 # EOFError right here.
-x "frappium-setup --site $SITE --admin-password $ADMIN_PW"
+x "vybench-setup --site $SITE --admin-password $ADMIN_PW"
 
 echo "==> post-setup checks"
 

@@ -9,7 +9,7 @@ PORT="$(site_conf webserver_port)"
 [ -n "$PORT" ] || PORT=8000
 
 # Bind address: loopback by default. Expose on the LAN with
-#   snap set frappium bind=0.0.0.0
+#   snap set vybench bind=0.0.0.0
 BIND="$(snapctl get bind 2>/dev/null || true)"
 [ -n "$BIND" ] || BIND=127.0.0.1
 

@@ -1,4 +1,4 @@
-# Frappium -- Frappe Framework / ERPNext as a native RPM.
+# Vybench -- Frappe Framework / ERPNext as a native RPM.
 #
 # Driven by scripts/package-rpm.sh, which stages the complete filesystem into a
 # tarball and passes the payload's own metadata in via --define. The spec never
@@ -7,11 +7,11 @@
 # way the venv's absolute paths and the asset symlinks come out correct.
 #
 # Required defines:
-#   frappium_version  frappium_arch  python_xy  distro_tag  frappe_branch
+#   vybench_version  vybench_arch  python_xy  distro_tag  frappe_branch
 
 %global bench_dir /opt/frappe-bench
 # Bundled CPython 3.14 -- see the Requires block for why it is bundled at all.
-%global python_home /usr/lib/frappium/python
+%global python_home /usr/lib/vybench/python
 
 # _unitdir comes from systemd-rpm-macros, which is NOT installed in a minimal
 # RHEL 9 / Rocky 9 build root -- rpmbuild then leaves the macro unexpanded and
@@ -37,14 +37,14 @@
 # packages. The real dependencies are the short list below.
 AutoReqProv: no
 
-Name:           frappium
-Version:        %{frappium_version}
+Name:           vybench
+Version:        %{vybench_version}
 Release:        1.%{distro_tag}%{?dist}
 Summary:        Frappe Framework and ERPNext, packaged for Fedora and RHEL
 License:        GPL-3.0-or-later
-URL:            https://github.com/vyogotech/frappium
-Source0:        frappium-root-%{version}.tar.gz
-BuildArch:      %{frappium_arch}
+URL:            https://github.com/vyogotech/vybench
+Source0:        vybench-root-%{version}.tar.gz
+BuildArch:      %{vybench_arch}
 
 # Uses the distribution's datastores and web server rather than bundling them --
 # that is the point of a native package, as opposed to the snap.
@@ -55,16 +55,16 @@ Requires:       nginx
 Requires:       mariadb-connector-c
 # No python dependency: frappe v16 requires exactly 3.14, which no Fedora or RHEL
 # release in this matrix ships, so the interpreter is bundled at
-# /usr/lib/frappium/python and the system python is not used at all.
+# /usr/lib/vybench/python and the system python is not used at all.
 #
 # The bundled interpreter does link against this release's OpenSSL, libffi and
 # sqlite. Those Requires are resolved at build time by asking rpm which packages
 # own the libraries it actually loads, and passed in via --define as one
 # space-separated list (rpm treats each name on the line as a separate Requires).
 %{?runtime_requires:Requires: %{runtime_requires}}
-# envsubst, for rendering the nginx vhost in frappium-setup.
+# envsubst, for rendering the nginx vhost in vybench-setup.
 Requires:       gettext
-# runuser, used by frappium-setup instead of sudo (minimal images have no sudo).
+# runuser, used by vybench-setup instead of sudo (minimal images have no sudo).
 Requires:       util-linux
 Requires:       git
 Requires:       curl
@@ -75,6 +75,8 @@ Requires:       ca-certificates
 # files in /opt/frappe-bench, and rpm refuses the transaction.
 Obsoletes:      frappista < %{version}-%{release}
 Obsoletes:      frappista-bench < %{version}-%{release}
+Obsoletes:      frappium < %{version}-%{release}
+Obsoletes:      frappium-bench < %{version}-%{release}
 
 Requires(pre):  shadow-utils
 Requires(post): systemd
@@ -96,7 +98,7 @@ Python 3.14 is bundled at %{python_home}, because frappe v16 requires exactly
 
 Built for %{distro_tag}, frappe %{frappe_branch}.
 
-Run 'frappium-setup' after installing to create the database account, the first
+Run 'vybench-setup' after installing to create the database account, the first
 site and the nginx vhost. Nothing starts before you do.
 
 %prep
@@ -148,7 +150,7 @@ chown -R frappe:frappe %{bench_dir}
 chmod -R ug+rwX,o-rwx %{bench_dir}
 # Nothing here is world-readable: sites/*/private holds uploaded documents and
 # site_config.json holds the database password. nginx gets access by being put in
-# the frappe group (frappium-setup does that), not by opening the tree up.
+# the frappe group (vybench-setup does that), not by opening the tree up.
 
 # Everyone reaches for `bench`. Only claim the name if it is free: a
 # pip-installed frappe-bench in /usr/local/bin is a common setup and silently
@@ -162,9 +164,9 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 if [ $1 -eq 1 ]; then
 cat <<'MSG'
 
-Frappium is installed but not yet configured.
+Vybench is installed but not yet configured.
 
-  sudo frappium-setup --site dev.localhost --admin-password admin
+  sudo vybench-setup --site dev.localhost --admin-password admin
 
 That creates the database account, the site, the nginx vhost, and starts the
 services. Nothing is running before you do.
@@ -178,10 +180,10 @@ if [ $1 -eq 0 ]; then
     # and nginx are shared with the rest of the system.
     systemctl stop 'frappe-worker@*.service' >/dev/null 2>&1 || :
     systemctl stop frappe-web.service frappe-scheduler.service \
-                   frappe-socketio.service frappium.target >/dev/null 2>&1 || :
+                   frappe-socketio.service vybench.target >/dev/null 2>&1 || :
     systemctl disable 'frappe-worker@*.service' >/dev/null 2>&1 || :
     systemctl disable frappe-web.service frappe-scheduler.service \
-                      frappe-socketio.service frappium.target >/dev/null 2>&1 || :
+                      frappe-socketio.service vybench.target >/dev/null 2>&1 || :
 fi
 exit 0
 
@@ -191,7 +193,7 @@ if [ $1 -eq 0 ]; then
        [ "$(readlink /usr/local/bin/bench)" = "%{bench_dir}/env/bin/bench" ]; then
         rm -f /usr/local/bin/bench
     fi
-    # frappium-setup wrote this one; rpm does not know about it.
+    # vybench-setup wrote this one; rpm does not know about it.
     rm -f /etc/nginx/conf.d/frappe.conf
     systemctl reload nginx >/dev/null 2>&1 || :
 
@@ -207,25 +209,25 @@ exit 0
 
 %files
 %defattr(-,root,root,-)
-%{_bindir}/frappium-setup
-%dir /etc/frappium
-%dir /etc/frappium/nginx
-%config(noreplace) /etc/frappium/frappium.env
-/etc/frappium/nginx/frappe.conf.template
+%{_bindir}/vybench-setup
+%dir /etc/vybench
+%dir /etc/vybench/nginx
+%config(noreplace) /etc/vybench/vybench.env
+/etc/vybench/nginx/frappe.conf.template
 %config(noreplace) /etc/my.cnf.d/10-frappe.cnf
-%{_unitdir}/frappium.target
+%{_unitdir}/vybench.target
 %{_unitdir}/frappe-web.service
 %{_unitdir}/frappe-worker@.service
 %{_unitdir}/frappe-scheduler.service
 %{_unitdir}/frappe-socketio.service
 %{bench_dir}
-%dir /usr/lib/frappium
+%dir /usr/lib/vybench
 %{python_home}
-%doc %{_datadir}/doc/frappium
+%doc %{_datadir}/doc/vybench
 
 %changelog
 * Fri Aug 14 2026 Vyogo Labs <dev@vyogolabs.tech> - 16.0.0-1
 - First native RPM. Ships a real bench payload built at the final install path.
 - Per-queue worker template unit, scheduler and socketio units added.
-- frappium-setup provisions a dedicated MariaDB admin account, so site
+- vybench-setup provisions a dedicated MariaDB admin account, so site
   creation is non-interactive.

@@ -36,12 +36,12 @@ BENCH_DIR=/opt/frappe-bench
 # the venv is created -- that path is what pyvenv.cfg records. A private
 # directory under /usr/lib is the FHS-correct home for a package-owned runtime.
 PYTHON_VERSION="3.14.7"
-PYTHON_HOME=/usr/lib/frappium/python
+PYTHON_HOME=/usr/lib/vybench/python
 
 # ---------------------------------------------------------------------------
 # Inner build -- runs inside the target-distribution container
 # ---------------------------------------------------------------------------
-if [ "${FRAPPIUM_BUILD_INNER:-0}" = "1" ]; then
+if [ "${VYBENCH_BUILD_INNER:-0}" = "1" ]; then
   DISTRO="${DISTRO:?}"
   FRAPPE_BRANCH="${FRAPPE_BRANCH:?}"
   EXTRA_APPS="${EXTRA_APPS:-}"
@@ -509,7 +509,7 @@ echo "==> $ENGINE run $DISTRO -- building bench payload at $BENCH_DIR"
 exec "$ENGINE" run --rm \
   -v "$ROOT_DIR":/src:ro,z \
   -v "$OUTPUT_ABS":/out:z \
-  -e FRAPPIUM_BUILD_INNER=1 \
+  -e VYBENCH_BUILD_INNER=1 \
   -e DISTRO="$DISTRO" \
   -e FRAPPE_BRANCH="$FRAPPE_BRANCH" \
   -e EXTRA_APPS="$EXTRA_APPS" \

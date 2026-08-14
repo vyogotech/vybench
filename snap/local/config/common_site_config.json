@@ -3,7 +3,7 @@
  "background_workers": 1,
  "db_host": "127.0.0.1",
  "db_port": 3306,
- "db_socket": "/var/snap/frappium/common/run/mysql.sock",
+ "db_socket": "/var/snap/vybench/common/run/mysql.sock",
  "developer_mode": 0,
  "gunicorn_workers": 2,
  "rebase_on_pull": false,

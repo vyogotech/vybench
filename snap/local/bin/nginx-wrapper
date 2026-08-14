@@ -47,7 +47,7 @@ envsubst '${BENCH_SITES}
 # The template is a bare server{} block, so wrap it in a minimal top-level config
 # whose paths all live under $SNAP_COMMON (nginx must never write into $SNAP).
 # The listen port lives in the template; override it with:
-#   snap set frappium nginx-port=8080
+#   snap set vybench nginx-port=8080
 LISTEN="$(snapctl get nginx-port 2>/dev/null || true)"
 if [ -n "$LISTEN" ]; then
   sed -i "s/^  listen [0-9]\+;/  listen $LISTEN;/" "$CONF_DIR/conf.d/frappe.conf"
