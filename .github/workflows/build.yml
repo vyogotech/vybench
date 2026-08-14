@@ -152,10 +152,17 @@ jobs:
         with:
           path: artifacts
 
-      - name: Collect
+      - name: Collect and checksum
         run: |
           mkdir -p dist
           find artifacts -type f \( -name '*.deb' -o -name '*.snap' \) -exec mv -t dist/ {} +
+
+          # The packages are NOT GPG-signed, so checksums are the only integrity
+          # check a downloader has. Publish them alongside, and generate from
+          # inside dist/ so the file lists bare names that `sha256sum -c` can
+          # resolve next to the downloads.
+          ( cd dist && sha256sum ./*.deb ./*.snap > SHA256SUMS )
+          cat dist/SHA256SUMS
           ls -lh dist
 
       - uses: softprops/action-gh-release@v2
@@ -164,14 +171,37 @@ jobs:
           body: |
             Frappe v16 / ERPNext as installable packages.
 
-            The `.deb` builds are **distribution-specific**: each bundles a
-            CPython 3.14 compiled against that release's OpenSSL and sqlite.
-            Pick the file matching your system. The `.snap` runs anywhere with
-            `snapd`.
+            ### Which file
+
+            The `.deb` builds are **distribution-specific** — each bundles a
+            CPython 3.14 compiled against that release's own OpenSSL and sqlite,
+            so they are not interchangeable:
+
+            | File | For |
+            | :--- | :--- |
+            | `vybench_*~ubuntu2404_*.deb` | Ubuntu 24.04 |
+            | `vybench_*~debian12_*.deb` | Debian 12 |
+            | `vybench_*.snap` | any distribution with `snapd` |
+
+            ### Install
 
             ```bash
-            sudo apt install ./vybench_*~ubuntu2404_*.deb
+            sudo apt install ./vybench_*~ubuntu2404_amd64.deb
             sudo vybench-setup --site dev.localhost --admin-password admin
+            ```
+
+            Installing starts nothing; `vybench-setup` creates the database
+            account, the site (with ERPNext installed), the nginx vhost, and
+            starts the services.
+
+            ### Verify your download
+
+            These packages are **not GPG-signed**, so `apt update` / `apt upgrade`
+            cannot track them — install the file directly and check it against
+            the published digest:
+
+            ```bash
+            sha256sum -c SHA256SUMS --ignore-missing
             ```
 
             See `docs/native-install.md` and `docs/snap-install.md`.

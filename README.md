@@ -63,7 +63,7 @@ One workflow, `.github/workflows/build.yml`. Every build job runs **in parallel*
 | `deb · debian:12` | same |
 | `snap · amd64` | `.snap` via Canonical's `snapcore/action-build` |
 | `snap · arm64` | opt-in (see below) |
-| `release` | GitHub release — waits for all of the above |
+| `release` | GitHub release — attaches the packages plus `SHA256SUMS`; waits for all of the above |
 | `publish-snap` | Snap Store, `edge` channel |
 
 Snaps are built with the **official** `snapcore/action-build@v1`, which
@@ -108,6 +108,28 @@ So the workflow triggers on **tags and manual dispatch only**, never on push, an
 `concurrency` cancels a superseded run rather than letting two two-hour builds
 race. Iterate locally with `scripts/build-bench-payload.sh` — the same code path
 CI uses.
+
+## Distribution
+
+Packages are published as **GitHub Release binaries**, with a `SHA256SUMS` file
+alongside.
+
+GitHub Packages is not an option: it hosts npm, NuGet, Maven, RubyGems and
+containers, but has **no apt or yum repository type**. A `.deb` can be pushed to
+`ghcr.io` as an OCI artifact, but `apt` cannot consume it, so that is storage
+rather than distribution.
+
+The consequence to be aware of: the packages are **not GPG-signed**, so
+`apt update` / `apt upgrade` cannot track them. Users download the file and
+install it directly. Moving to a real signed apt/yum repository later (hosted
+anywhere — Cloudsmith, packagecloud, or self-hosted with `reprepro`/`createrepo`)
+means every existing user must add a new signing key by hand, so if updates are
+ever going to be part of the product, signing is cheaper to add before people
+install than after.
+
+Note also that release assets on a **private** repository require an
+authenticated download, which plain `curl` in a customer's install script will
+not do without a token.
 
 ## Licensing
 
