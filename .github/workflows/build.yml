@@ -39,24 +39,78 @@ permissions:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # Build the matrices here rather than inline.
+  #
+  # An inline expression cannot pick up the ARM64_RUNNER repository variable
+  # without unreadable format()/brace-escaping, and getting a matrix expression
+  # subtly wrong produces ZERO jobs with no error at all -- which already
+  # happened once and silently removed the entire snap build from a run.
+  # Computing it in a step means it can be printed, and read.
+  # ---------------------------------------------------------------------------
+  matrix:
+    name: Plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      snap: ${{ steps.plan.outputs.snap }}
+      deb: ${{ steps.plan.outputs.deb }}
+    steps:
+      - id: plan
+        run: |
+          # Where arm64 builds run. GitHub's own arm64 runners require Team or
+          # above for private repositories; on Free the label never resolves and
+          # the job queues forever instead of failing. Point ARM64_RUNNER at a
+          # self-hosted runner to avoid that -- e.g. a Hetzner CAX instance,
+          # which is arm64 (Ampere) and costs less than the plan upgrade:
+          #
+          #   gh variable set ARM64_RUNNER --repo vyogotech/vybench \
+          #     --body '["self-hosted","linux","ARM64"]'
+          #
+          # The value is a JSON array of labels, or a single label string.
+          ARM_RUNNER='${{ vars.ARM64_RUNNER }}'
+          [ -n "$ARM_RUNNER" ] || ARM_RUNNER='"ubuntu-24.04-arm"'
+          case "$ARM_RUNNER" in '['*|'"'*) ;; *) ARM_RUNNER="\"$ARM_RUNNER\"" ;; esac
+
+          if [ "${{ inputs.include_arm64 }}" = "true" ] || \
+             [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
+            SNAP="[{\"arch\":\"amd64\",\"runner\":\"ubuntu-24.04\"},{\"arch\":\"arm64\",\"runner\":$ARM_RUNNER}]"
+            DEB="[{\"distro\":\"ubuntu:24.04\",\"runner\":\"ubuntu-24.04\"},{\"distro\":\"debian:12\",\"runner\":\"ubuntu-24.04\"},{\"distro\":\"ubuntu:24.04\",\"runner\":$ARM_RUNNER}]"
+          else
+            SNAP='[{"arch":"amd64","runner":"ubuntu-24.04"}]'
+            DEB='[{"distro":"ubuntu:24.04","runner":"ubuntu-24.04"},{"distro":"debian:12","runner":"ubuntu-24.04"}]'
+          fi
+
+          # Fail loudly on malformed JSON: fromJSON on a bad string yields an
+          # empty matrix and therefore no jobs, with nothing in the log.
+          python3 -c "import json,sys; assert json.loads(sys.argv[1]), 'empty'" "$SNAP"
+          python3 -c "import json,sys; assert json.loads(sys.argv[1]), 'empty'" "$DEB"
+
+          echo "snap=$SNAP" >> "$GITHUB_OUTPUT"
+          echo "deb=$DEB"  >> "$GITHUB_OUTPUT"
+          echo "snap matrix: $SNAP"
+          echo "deb  matrix: $DEB"
+
+  # ---------------------------------------------------------------------------
   # .deb -- one job per distribution, all running concurrently with the snap job
   # ---------------------------------------------------------------------------
   deb:
-    name: deb · ${{ matrix.distro }}
-    runs-on: ubuntu-24.04
+    name: deb · ${{ matrix.distro }} · ${{ matrix.runner }}
+    needs: matrix
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     strategy:
       # One distribution failing must not cancel the others; a partial set of
       # artefacts is far more useful than none when a build breaks.
       fail-fast: false
       matrix:
-        distro: ['ubuntu:24.04', 'debian:12']
+        include: ${{ fromJSON(needs.matrix.outputs.deb) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Slug
         id: s
-        run: echo "slug=$(echo '${{ matrix.distro }}' | tr ':' '-')" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "slug=$(echo '${{ matrix.distro }}' | tr ':' '-')-$(uname -m)" >> "$GITHUB_OUTPUT"
 
       # Builds the bench at /opt/frappe-bench inside a container of the target
       # distribution -- the same path the package installs to, which is what keeps
@@ -82,7 +136,7 @@ jobs:
       - name: Verify in a clean container
         run: ./scripts/test-native-package.sh --distro "${{ matrix.distro }}" --engine docker
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: deb-${{ steps.s.outputs.slug }}
           path: dist/*.deb
@@ -96,26 +150,13 @@ jobs:
     name: snap · ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
+    needs: matrix
     strategy:
       fail-fast: false
       matrix:
-        # arm64 is opt-in: GitHub's arm64 runners are not available to private
-        # repositories on the Free plan, and an unavailable label queues forever
-        # rather than failing fast.
-        #
-        # Built with fromJSON rather than include + a computed `exclude`. That
-        # earlier form produced ZERO combinations -- `exclude` filters the base
-        # matrix, and a matrix defined purely by `include` has no base -- so the
-        # whole snap job silently disappeared from the run and `publish-snap`
-        # skipped because its `needs` never existed. No error, just no job.
-        include: >-
-          ${{ fromJSON(
-            (inputs.include_arm64 || startsWith(github.ref, 'refs/tags/'))
-            && '[{"arch":"amd64","runner":"ubuntu-24.04"},{"arch":"arm64","runner":"ubuntu-24.04-arm"}]'
-            || '[{"arch":"amd64","runner":"ubuntu-24.04"}]'
-          ) }}
+        include: ${{ fromJSON(needs.matrix.outputs.snap) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # Canonical's official action. It provisions LXD correctly, which the
       # previous hand-rolled setup could not: `usermod -aG lxd $USER` followed by
@@ -123,14 +164,14 @@ jobs:
       # snapcraft always came back with "LXD requires additional permissions".
       - name: Build snap
         id: build
-        uses: snapcore/action-build@v1
+        uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1
         with:
           # Omits snap/manifest.yaml. The store uses it to flag vulnerable
           # stage-packages, but it also enumerates everything the snap was built
           # from -- which this being a private, commercial artefact argues against.
           build-info: false
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: snap-${{ matrix.arch }}
           path: ${{ steps.build.outputs.snap }}
@@ -142,13 +183,13 @@ jobs:
   # ---------------------------------------------------------------------------
   release:
     name: Release
-    needs: [deb, snap]
+    needs: [matrix, deb, snap]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
 
@@ -165,7 +206,7 @@ jobs:
           cat dist/SHA256SUMS
           ls -lh dist
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: dist/*
           body: |
@@ -212,7 +253,7 @@ jobs:
     if: inputs.publish_snap || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: snap-amd64
 
@@ -231,7 +272,7 @@ jobs:
             echo "::error::SNAPCRAFT_STORE_CREDENTIALS is not set in this repository's secrets."
             exit 1; }
 
-      - uses: snapcore/action-publish@v1
+      - uses: snapcore/action-publish@214b86e5ca036ead1668c79afb81e550e6c54d40 # v1
         env:
           SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
         with:
