@@ -1,0 +1,74 @@
+#!/bin/bash
+# Mirrors upload/src/nginx/nginx-entrypoint.sh: fill the shared frappe.conf
+# template with envsubst, then run nginx in the foreground.
+set -e
+
+. "$SNAP/bin/snap-common.sh"
+
+bootstrap_common
+reexec_as_daemon "$0" "$@"
+
+CONF_DIR="$SNAP_COMMON/nginx"
+mkdir -p "$CONF_DIR/conf.d" "$CONF_DIR/logs" "$CONF_DIR/tmp"
+
+# Everything is loopback inside the snap, so unlike the container there are no
+# service names to re-resolve -- but the template's resolver directive still
+# needs a valid nameserver to parse.
+NAMESERVER=$(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf 2>/dev/null || true)
+[ -n "$NAMESERVER" ] || NAMESERVER=127.0.0.1
+
+WEB_PORT="$(site_conf webserver_port)"; [ -n "$WEB_PORT" ] || WEB_PORT=8000
+SIO_PORT="$(site_conf socketio_port)";  [ -n "$SIO_PORT" ] || SIO_PORT=9000
+
+export BENCH_SITES="$SNAP_COMMON/bench/sites"
+export BACKEND="127.0.0.1:$WEB_PORT"
+export SOCKETIO="127.0.0.1:$SIO_PORT"
+export NAMESERVER
+export UPSTREAM_REAL_IP_ADDRESS=127.0.0.1
+export UPSTREAM_REAL_IP_HEADER=X-Forwarded-For
+export UPSTREAM_REAL_IP_RECURSIVE=off
+export FRAPPE_SITE_NAME_HEADER='$host'
+export PROXY_READ_TIMEOUT=120
+export CLIENT_MAX_BODY_SIZE=50m
+
+# shellcheck disable=SC2016
+envsubst '${BENCH_SITES}
+  ${BACKEND}
+  ${SOCKETIO}
+  ${NAMESERVER}
+  ${UPSTREAM_REAL_IP_ADDRESS}
+  ${UPSTREAM_REAL_IP_HEADER}
+  ${UPSTREAM_REAL_IP_RECURSIVE}
+  ${FRAPPE_SITE_NAME_HEADER}
+  ${PROXY_READ_TIMEOUT}
+  ${CLIENT_MAX_BODY_SIZE}' \
+  < "$SNAP/nginx/frappe.conf.template" > "$CONF_DIR/conf.d/frappe.conf"
+
+# The template is a bare server{} block, so wrap it in a minimal top-level config
+# whose paths all live under $SNAP_COMMON (nginx must never write into $SNAP).
+# The listen port lives in the template; override it with:
+#   snap set frappista nginx-port=8080
+LISTEN="$(snapctl get nginx-port 2>/dev/null || true)"
+if [ -n "$LISTEN" ]; then
+  sed -i "s/^  listen [0-9]\+;/  listen $LISTEN;/" "$CONF_DIR/conf.d/frappe.conf"
+fi
+
+cat > "$CONF_DIR/nginx.conf" <<EOF
+daemon off;
+pid $CONF_DIR/nginx.pid;
+error_log $CONF_DIR/logs/error.log;
+events { worker_connections 1024; }
+http {
+  include $SNAP/etc/nginx/mime.types;
+  default_type application/octet-stream;
+  access_log $CONF_DIR/logs/access.log;
+  client_body_temp_path $CONF_DIR/tmp;
+  proxy_temp_path $CONF_DIR/tmp;
+  fastcgi_temp_path $CONF_DIR/tmp;
+  uwsgi_temp_path $CONF_DIR/tmp;
+  scgi_temp_path $CONF_DIR/tmp;
+  include $CONF_DIR/conf.d/*.conf;
+}
+EOF
+
+exec "$SNAP/usr/sbin/nginx" -c "$CONF_DIR/nginx.conf" -p "$CONF_DIR"

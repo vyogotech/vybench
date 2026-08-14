@@ -1,0 +1,13 @@
+#!/bin/bash
+set -e
+
+. "$SNAP/bin/snap-common.sh"
+
+bootstrap_common
+cd "$SNAP_COMMON/bench"
+
+# Developer-mode asset rebuilder (`bench watch`). Needs node/yarn on PATH.
+export PATH="$SNAP/bin:$PATH"
+
+run_as_daemon "$BENCH_PY" \
+  "$BENCH_CLI" watch

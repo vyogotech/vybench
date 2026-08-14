@@ -1,0 +1,11 @@
+#!/bin/bash
+set -e
+
+. "$SNAP/bin/snap-common.sh"
+
+bootstrap_datastores
+
+run_as_daemon "$SNAP/usr/bin/redis-server" \
+  --port 6379 \
+  --dir "$SNAP_COMMON/redis" \
+  --daemonize no

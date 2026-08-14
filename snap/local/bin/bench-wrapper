@@ -1,0 +1,19 @@
+#!/bin/bash
+set -e
+
+. "$SNAP/bin/snap-common.sh"
+
+require_bench_access "$@" || exit 1
+
+bootstrap_common
+
+# If the current directory is not a bench, default to the common bench.
+if [ ! -f "Procfile" ] && [ ! -d "sites" ]; then
+  cd "$SNAP_COMMON/bench"
+fi
+
+# Normally this already runs as the invoking host user and run_as_daemon is a
+# plain exec. It only drops privileges when someone runs `sudo frappista.bench`,
+# which bench would otherwise refuse to do.
+run_as_daemon "$BENCH_PY" \
+  "$BENCH_CLI" "$@"

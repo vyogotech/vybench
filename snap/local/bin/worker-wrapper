@@ -1,0 +1,16 @@
+#!/bin/bash
+set -e
+
+. "$SNAP/bin/snap-common.sh"
+
+# Queue name comes from the app definition (bin/worker-wrapper <queue>).
+QUEUE="${1:-default}"
+
+bootstrap_common
+cd "$SNAP_COMMON/bench"
+
+# Runs as snap_daemon, so bench's is_root() is false and change_uid() -- which
+# would try to setuid to a `frappe` user that does not exist on the host -- is
+# never reached.
+run_as_daemon "$BENCH_PY" \
+  "$BENCH_CLI" worker --queue "$QUEUE"

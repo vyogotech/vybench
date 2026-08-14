@@ -1,0 +1,14 @@
+#!/bin/bash
+set -e
+
+. "$SNAP/bin/snap-common.sh"
+
+bootstrap_common
+cd "$SNAP_COMMON/bench"
+
+# `bench schedule` is the long-running scheduler process (the supervisor
+# frappe-schedule program). Note it is separate from per-site scheduler state:
+# a site still needs `bench --site <site> scheduler enable`, which the configure
+# hook does for production mode.
+run_as_daemon "$BENCH_PY" \
+  "$BENCH_CLI" schedule

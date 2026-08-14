@@ -1,0 +1,37 @@
+#!/bin/bash
+set -e
+
+. "$SNAP/bin/snap-common.sh"
+
+bootstrap_common
+
+PORT="$(site_conf webserver_port)"
+[ -n "$PORT" ] || PORT=8000
+
+# Bind address: loopback by default. Expose on the LAN with
+#   snap set frappista bind=0.0.0.0
+BIND="$(snapctl get bind 2>/dev/null || true)"
+[ -n "$BIND" ] || BIND=127.0.0.1
+
+if [ "$(get_mode)" = "developer" ]; then
+  # Developer mode mirrors the Procfile's `web: bench serve`: werkzeug with the
+  # auto-reloader, which also serves /assets and /files itself.
+  cd "$SNAP_COMMON/bench"
+  run_as_daemon "$BENCH_PY" \
+    "$BENCH_CLI" serve --port "$PORT"
+fi
+
+# Production: gunicorn. frappe.app:application serves no static files -- in a
+# normal deployment nginx handles /assets and /files. When the optional nginx
+# daemon is disabled (the default) nothing else would serve them, so use
+# frappe's own application_with_statics() factory, which wraps the WSGI app in
+# the same middleware pair `bench serve` uses. Otherwise every CSS/JS request
+# 404s and the desk renders unstyled.
+WORKERS="$(site_conf gunicorn_workers)"
+[ -n "$WORKERS" ] || WORKERS=2
+
+run_as_daemon "$BENCH_PY" -m gunicorn \
+  -b "$BIND:$PORT" \
+  -w "$WORKERS" \
+  'frappe.app:application_with_statics()' \
+  --chdir "$SNAP_COMMON/bench/sites"

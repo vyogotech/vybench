@@ -1,0 +1,43 @@
+[Unit]
+# Frappe's realtime server. Without it the desk still loads, but live document
+# updates, notifications, progress bars and background-job feedback are all
+# dead, and the browser console fills with failed socket.io polls.
+Description=Frappe realtime server (socket.io)
+Documentation=https://github.com/vyogotech/frappista
+After=network-online.target @REDIS_SVC@
+Wants=network-online.target
+Requires=@REDIS_SVC@
+PartOf=frappista.target
+
+[Service]
+Type=simple
+User=frappe
+Group=frappe
+
+Environment=HOME=@BENCH@
+# socketio.js resolves its dependencies relative to its own directory, so it
+# must be started by path from the bench root -- exactly as bench's Procfile
+# does (`socketio: {{ node }} apps/frappe/socketio.js`).
+Environment=NODE_PATH=@BENCH@/apps/frappe/node_modules
+EnvironmentFile=-/etc/frappista/frappista.env
+
+WorkingDirectory=@BENCH@
+ExecStart=@NODE@ @BENCH@/apps/frappe/socketio.js
+
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=@BENCH@
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=frappe-socketio
+
+[Install]
+WantedBy=multi-user.target

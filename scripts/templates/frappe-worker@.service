@@ -1,0 +1,49 @@
+[Unit]
+# Template unit: %i is the queue name.
+#   systemctl enable --now frappe-worker@default frappe-worker@short frappe-worker@long
+#
+# All three queues need a worker. Running only `default` -- as the previous
+# single-queue unit did -- means every job enqueued to short/long is accepted
+# by redis and never executed. There is no error anywhere; the work just never
+# happens. See docs/native-packaging-plan.md, defect 3.
+Description=Frappe background worker (%i queue)
+Documentation=https://github.com/vyogotech/frappista
+After=network-online.target @MARIADB_SVC@ @REDIS_SVC@
+Wants=network-online.target
+Requires=@MARIADB_SVC@ @REDIS_SVC@
+PartOf=frappista.target
+
+[Service]
+Type=simple
+User=frappe
+Group=frappe
+
+Environment=HOME=@BENCH@
+EnvironmentFile=-/etc/frappista/frappista.env
+
+# bench must be invoked from the bench root, not sites/. Its
+# is_bench_directory() check requires apps, sites, config, logs AND config/pids
+# to all exist; if any is missing, bench decides it is not inside a bench,
+# never loads frappe's subcommands, and this unit dies with
+# "Error: No such command 'worker'". config/pids is the one that goes missing.
+WorkingDirectory=@BENCH@
+ExecStart=@BENCH@/env/bin/bench worker --queue %i
+
+Restart=always
+RestartSec=5
+# Workers should finish the job in flight before exiting.
+KillSignal=SIGTERM
+TimeoutStopSec=120
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=@BENCH@
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=frappe-worker-%i
+
+[Install]
+WantedBy=multi-user.target

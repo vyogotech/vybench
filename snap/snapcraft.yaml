@@ -1,0 +1,345 @@
+name: frappista
+title: Frappe Bench & ERPNext Server
+version: '16.0.0'
+summary: Single-node Frappe Bench & ERPNext environment for Linux
+description: |
+  Frappista packages Frappe Bench v16 (ERPNext) as a portable Linux snap.
+  Includes Python 3.14, Node.js 24, Redis 7, MariaDB, Nginx, and wkhtmltopdf.
+  Installs on any Linux distro with snapd: Fedora, Ubuntu, Debian, Arch, etc.
+license: GPL-3.0
+contact: https://github.com/vyogotech/frappista/issues
+issues: https://github.com/vyogotech/frappista/issues
+source-code: https://github.com/vyogotech/frappista
+website: https://github.com/vyogotech/frappista
+base: core24
+confinement: classic
+
+# snapd creates this system account at install time on every distribution, giving
+# the daemons a portable non-root identity. Nothing in this snap runs as root:
+# snapd starts each service as root, and every wrapper immediately drops to
+# snap_daemon via setpriv before exec'ing the real process.
+system-usernames:
+  snap_daemon: shared
+
+platforms:
+  amd64:
+    build-on: [amd64]
+    build-for: [amd64]
+  arm64:
+    build-on: [arm64]
+    build-for: [arm64]
+
+environment:
+  # NOTE: $SNAPCRAFT_ARCH_TRIPLET is a build-time variable and is not expanded
+  # here on core24, so both triplets are listed literally. A non-existent
+  # directory on LD_LIBRARY_PATH is ignored by the loader, so this is safe.
+  PATH: $SNAP/usr/sbin:$SNAP/usr/bin:$SNAP/sbin:$SNAP/bin:$SNAP/opt/frappe-bench/env/bin:$PATH
+  LD_LIBRARY_PATH: $SNAP/usr/lib/x86_64-linux-gnu:$SNAP/usr/lib/aarch64-linux-gnu:$SNAP/usr/lib:$SNAP/lib/x86_64-linux-gnu:$SNAP/lib/aarch64-linux-gnu:$SNAP/lib:$LD_LIBRARY_PATH
+  PYTHONPATH: $SNAP/opt/frappe-bench/apps/frappe:$SNAP/opt/frappe-bench/env/lib/python3.14/site-packages
+  MYSQL_UNIX_PORT: $SNAP_COMMON/mariadb/mysql.sock
+  LC_ALL: C.UTF-8
+  LANG: C.UTF-8
+
+apps:
+  bench:
+    command: bin/bench-wrapper
+    plugs: [network, network-bind, home]
+
+  mariadb:
+    command: bin/mariadb-wrapper
+    daemon: simple
+    restart-condition: always
+
+  redis:
+    command: bin/redis-wrapper
+    daemon: simple
+    restart-condition: always
+
+  # Web server. Serves gunicorn in production mode and `bench serve` (auto-reload)
+  # in developer mode; the wrapper branches on `snapctl get mode`.
+  web:
+    command: bin/web-wrapper
+    daemon: simple
+    restart-condition: always
+
+  # One worker per queue, mirroring the supervisor programs that
+  # `bench setup production` generates. Running only the default queue silently
+  # strands every job enqueued to short/long.
+  worker:
+    command: bin/worker-wrapper default
+    daemon: simple
+    restart-condition: always
+
+  worker-short:
+    command: bin/worker-wrapper short
+    daemon: simple
+    restart-condition: always
+
+  worker-long:
+    command: bin/worker-wrapper long
+    daemon: simple
+    restart-condition: always
+
+  # Without this, nothing scheduled ever runs: no email queue flush, no auto-repeat.
+  scheduler:
+    command: bin/scheduler-wrapper
+    daemon: simple
+    restart-condition: always
+
+  # Node realtime server. Frappe's live updates/notifications need this.
+  socketio:
+    command: bin/socketio-wrapper
+    daemon: simple
+    restart-condition: always
+
+  # Developer-mode asset rebuilder. Off unless `snap set frappista mode=developer`.
+  watch:
+    command: bin/watch-wrapper
+    daemon: simple
+    restart-condition: always
+    install-mode: disable
+
+  # Opt-in reverse proxy. Disabled by default because binding :80 collides with
+  # any web server already on the host, and gunicorn already serves statics.
+  # Enable with: snap set frappista nginx=true
+  nginx:
+    command: bin/nginx-wrapper
+    daemon: simple
+    restart-condition: always
+    install-mode: disable
+
+  mysql:
+    command: usr/bin/mariadb
+    plugs: [network, network-bind]
+
+  mysqldump:
+    command: usr/bin/mariadb-dump
+    plugs: [network, network-bind, home]
+
+  redis-cli:
+    command: usr/bin/redis-cli
+    plugs: [network, network-bind]
+
+parts:
+  # ── 0. Launcher wrappers ────────────────────────────────────────────────────
+  # A dedicated part so snapcraft tracks snap/local/bin/* as a real source: any
+  # wrapper edit invalidates this part and is picked up on an incremental build.
+  wrappers:
+    plugin: dump
+    source: snap/local
+    override-build: |
+      craftctl default
+      chmod 755 $SNAPCRAFT_PART_INSTALL/bin/*
+
+  # ── 1. System runtime packages ──────────────────────────────────────────────
+  system-deps:
+    plugin: nil
+    stage-packages:
+      - mariadb-server
+      - mariadb-client
+      - libmariadb-dev
+      - util-linux          # provides setpriv, used to drop to snap_daemon
+      - gettext-base        # provides envsubst, used to render the nginx template
+      - libcrypt1
+      - libedit2
+      - libncurses6
+      - nginx
+      - nginx-common
+      - git
+      - curl
+      - ca-certificates
+      - gcc
+      - make
+      - jq
+      - socat
+      - wkhtmltopdf
+      - xfonts-75dpi
+      - xfonts-encodings
+      - xfonts-utils
+
+  # ── 2. Redis (compiled from source with MALLOC=libc for cross-arch safety) ──
+  redis-server:
+    plugin: nil
+    build-packages:
+      - gcc
+      - make
+      - pkg-config
+      - curl
+      - ca-certificates
+    override-build: |
+      set -ex
+      curl -fsSL https://download.redis.io/releases/redis-7.2.7.tar.gz \
+        | tar -xzf - --strip-components=1
+      make MALLOC=libc CFLAGS="-fno-lto" -j$(nproc)
+      make install PREFIX=$SNAPCRAFT_PART_INSTALL/usr
+
+  # ── 3. Node.js 24 + Yarn ───────────────────────────────────────────────────
+  nodejs:
+    plugin: nil
+    override-build: |
+      set -ex
+      NODE_VER="v24.19.0"
+      ARCH=$(uname -m)
+      [ "$ARCH" = "x86_64" ] && NODE_ARCH="x64" || NODE_ARCH="arm64"
+      curl -fsSL "https://nodejs.org/dist/${NODE_VER}/node-${NODE_VER}-linux-${NODE_ARCH}.tar.xz" \
+        | tar -xJf - --strip-components=1 -C $SNAPCRAFT_PART_INSTALL
+      # Install yarn into the snap prefix so it's fully isolated
+      export PATH=$SNAPCRAFT_PART_INSTALL/bin:$PATH
+      npm install -g yarn --prefix $SNAPCRAFT_PART_INSTALL
+
+  # ── 4. Python 3.14 + Frappe Bench v16 via bench init ───────────────────────
+  frappe-bench:
+    plugin: nil
+    after: [system-deps, redis-server, nodejs]
+    build-packages:
+      - software-properties-common
+      - git
+      - curl
+      - ca-certificates
+      - gcc
+      - make
+      - pkg-config
+      - libmariadb-dev
+    stage-packages:
+      - python3-pip
+    override-build: |
+      set -ex
+
+      # --- Install Python 3.14 from deadsnakes PPA ---
+      if ! ls /etc/apt/sources.list.d/deadsnakes* >/dev/null 2>&1; then
+        echo "deb [trusted=yes] https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu noble main" > /etc/apt/sources.list.d/deadsnakes.list
+        apt-get update -qq
+      fi
+      apt-get install -y --no-install-recommends \
+        python3.14 python3.14-venv python3.14-dev libpython3.14-dev python3-pip \
+        libcrypt1 libedit2 libncurses6 mariadb-server mariadb-client \
+        libffi8 libsqlite3-0 libbz2-1.0 liblzma5 zlib1g libexpat1 \
+        libreadline8 libuuid1 libgdbm6 libnsl2 libtirpc3t64
+
+      # Ensure all critical shared libraries are copied into the part install directory
+      ARCH_TRIPLET="$(uname -m)-linux-gnu"
+      [ "$(uname -m)" = "x86_64" ] && ARCH_TRIPLET="x86_64-linux-gnu" || ARCH_TRIPLET="aarch64-linux-gnu"
+      mkdir -p "$SNAPCRAFT_PART_INSTALL/usr/lib/$ARCH_TRIPLET"
+
+      # Every shared library the bundled CPython and its stdlib extension modules
+      # link against must be staged, otherwise lib-dynload/*.so silently falls back
+      # to host libraries and reintroduces the OPENSSL_3.3.0 ABI collision.
+      for lib in libssl libcrypto libcrypt libedit libtinfo libncurses libncursesw \
+                 libaio liburing libpcre2 libpython3.14 libffi libsqlite3 libbz2 \
+                 liblzma libz libexpat libreadline libuuid libgdbm libnsl libtirpc; do
+        cp -a /usr/lib/$ARCH_TRIPLET/$lib* "$SNAPCRAFT_PART_INSTALL/usr/lib/$ARCH_TRIPLET/" 2>/dev/null || true
+        cp -a /lib/$ARCH_TRIPLET/$lib* "$SNAPCRAFT_PART_INSTALL/usr/lib/$ARCH_TRIPLET/" 2>/dev/null || true
+      done
+
+      # --- Create frappe user (bench refuses to run as root) ---
+      useradd -m -s /bin/bash frappe 2>/dev/null || true
+
+      # --- Prepare install directory ---
+      mkdir -p $SNAPCRAFT_PART_INSTALL/opt
+      chown -R frappe:frappe $SNAPCRAFT_PART_INSTALL/opt
+
+      # --- Make staged Node.js and Redis available during bench init ---
+      export PATH=$SNAPCRAFT_STAGE/bin:$SNAPCRAFT_STAGE/usr/bin:$PATH
+      export GIT_EXEC_PATH=/usr/lib/git-core
+
+      # --- Run bench init using temporary bootstrap bench venv ---
+      su frappe -c "
+        set -ex
+        # Bootstrap temporary CLI venv to run bench init
+        mkdir -p /tmp/bench-bootstrap
+        python3.14 -m venv /tmp/bench-bootstrap/env
+        /tmp/bench-bootstrap/env/bin/pip install --upgrade pip setuptools wheel
+        /tmp/bench-bootstrap/env/bin/pip install 'frappe-bench==5.21.5' 'click<8.2' redis mysql-connector-python
+
+        # Ensure bootstrap bench, Node 24, and yarn are in PATH
+        export PATH=/tmp/bench-bootstrap/env/bin:$PATH
+        export GIT_EXEC_PATH=/usr/lib/git-core
+
+        # Configure yarn
+        yarn config set ignore-engines true || true
+
+        # bench init creates $SNAPCRAFT_PART_INSTALL/opt/frappe-bench from scratch
+        cd $SNAPCRAFT_PART_INSTALL/opt
+        rm -rf frappe-bench
+        /tmp/bench-bootstrap/env/bin/bench init \
+          --frappe-branch version-16 \
+          --python python3.14 \
+          --no-backups \
+          --skip-redis-config-generation \
+          --verbose \
+          frappe-bench
+
+        # Ensure bench CLI is installed inside the snap bench env
+        ./frappe-bench/env/bin/pip install 'frappe-bench==5.21.5' 'click<8.2'
+      "
+
+      # --- Bundle Python 3.14 and fix virtualenv symlinks ---
+      mkdir -p $SNAPCRAFT_PART_INSTALL/usr/bin $SNAPCRAFT_PART_INSTALL/usr/lib
+      cp -a /usr/bin/python3.14* $SNAPCRAFT_PART_INSTALL/usr/bin/
+      cp -a /usr/lib/python3.14 $SNAPCRAFT_PART_INSTALL/usr/lib/
+
+      VENV_BIN=$SNAPCRAFT_PART_INSTALL/opt/frappe-bench/env/bin
+      rm -f $VENV_BIN/python3.14 $VENV_BIN/python $VENV_BIN/python3
+
+      # The symlink lives in opt/frappe-bench/env/bin, so reaching $SNAP/usr
+      # takes FOUR levels of "..": bin -> env -> frappe-bench -> opt -> $SNAP.
+      ln -sf ../../../../usr/bin/python3.14 $VENV_BIN/python3.14
+      ln -sf python3.14 $VENV_BIN/python3
+      ln -sf python3.14 $VENV_BIN/python
+
+      # Fail the build loudly if the relative depth ever regresses.
+      test -e "$VENV_BIN/python3.14" \
+        || { echo "FATAL: venv python symlink is broken (wrong ../ depth)"; exit 1; }
+
+      # pyvenv.cfg still points at the build host's interpreter. Left as-is, CPython
+      # resolves the stdlib to the HOST /usr/lib/python3.14 at runtime, which is the
+      # original OPENSSL_3.3.0 failure. Repoint it at the bundled interpreter via the
+      # revision-stable /snap/frappista/current symlink.
+      PYVENV_CFG=$SNAPCRAFT_PART_INSTALL/opt/frappe-bench/env/pyvenv.cfg
+      sed -i \
+        -e "s|^home = .*|home = /snap/frappista/current/usr/bin|" \
+        -e "s|^executable = .*|executable = /snap/frappista/current/usr/bin/python3.14|" \
+        -e "s|^base-executable = .*|base-executable = /snap/frappista/current/usr/bin/python3.14|" \
+        "$PYVENV_CFG"
+      echo "--- pyvenv.cfg after rewrite ---"; cat "$PYVENV_CFG"
+
+      # --- Replace the build-time common_site_config.json ---
+      # `bench init` leaves bench's stock defaults here: redis on 11000/13000 and
+      # frappe_user=frappe (a user that exists only in this build container, and
+      # whose absence on the host is what makes bench's change_uid() raise
+      # KeyError). Anything resolving config relative to the app directory --
+      # frappe's node/socketio code does exactly that -- would read it. Overwrite
+      # it with the same static file the runtime bench is seeded from, so the two
+      # copies cannot drift.
+      cp $SNAPCRAFT_PROJECT_DIR/snap/local/config/common_site_config.json \
+         $SNAPCRAFT_PART_INSTALL/opt/frappe-bench/sites/common_site_config.json
+
+      # --- Relativise the asset symlinks bench created ---
+      # `bench init` links sites/assets/<app> to each app's public/ directory using
+      # an ABSOLUTE build-container path (/root/parts/.../apps/frappe/frappe/public).
+      # That target does not exist on the target system, so every /assets/** request
+      # 404s. Rewrite each one relative to sites/assets/ instead.
+      ASSETS_DIR=$SNAPCRAFT_PART_INSTALL/opt/frappe-bench/sites/assets
+      for link in "$ASSETS_DIR"/*; do
+        [ -L "$link" ] || continue
+        target=$(readlink "$link")
+        case "$target" in
+          "$SNAPCRAFT_PART_INSTALL"/opt/frappe-bench/*)
+            rel=${target#$SNAPCRAFT_PART_INSTALL/opt/frappe-bench/}
+            ln -sfn "../../$rel" "$link"
+            echo "relinked assets/$(basename "$link") -> ../../$rel"
+            ;;
+        esac
+      done
+      # Fail the build if any absolute build-tree symlink survived.
+      if find "$ASSETS_DIR" -maxdepth 1 -type l -lname "$SNAPCRAFT_PART_INSTALL/*" | grep -q .; then
+        echo "FATAL: absolute build-path symlinks remain under sites/assets"; exit 1
+      fi
+
+      # NOTE: the launcher wrappers are installed by the separate `wrappers` part.
+      # They must NOT be copied here: snapcraft hashes part definitions rather than
+      # arbitrary project files, so edits to snap/local/bin/* would not invalidate
+      # this part and the stale wrappers would silently ship.
+
+      # Ensure all files in opt are globally readable and executable
+      chmod -R a+rX $SNAPCRAFT_PART_INSTALL/opt

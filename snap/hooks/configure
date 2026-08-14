@@ -1,0 +1,86 @@
+#!/bin/bash
+# Runs on `snap set frappista ...`, and once after install.
+#
+#   snap set frappista mode=production   # full managed stack (default)
+#   snap set frappista mode=developer    # datastores only; you run `bench serve`
+#   snap set frappista nginx=true        # opt-in reverse proxy (production only)
+#   snap set frappista nginx-port=8080
+#   snap set frappista bind=0.0.0.0      # expose the web port on the LAN
+set -e
+
+# Datastores. Needed in BOTH modes -- `bench serve` is useless without a
+# database and a redis to talk to.
+INFRA="mariadb redis"
+
+# The managed application tier. In developer mode these stay off: a developer
+# bench runs `bench serve` (or `bench start`) by hand, in the foreground, so
+# having systemd run a second gunicorn/worker set against the same site would
+# just fight with it.
+APP="web worker worker-short worker-long scheduler socketio"
+
+MODE=$(snapctl get mode 2>/dev/null || true)
+[ -n "$MODE" ] || MODE=production
+case "$MODE" in
+  developer|dev)   MODE=developer ;;
+  production|prod) MODE=production ;;
+  *)
+    echo "invalid mode '$MODE': expected 'production' or 'developer'" >&2
+    exit 1 ;;
+esac
+snapctl set mode="$MODE"
+
+enable_svc()  { for s in $1; do snapctl start --enable "frappista.$s" 2>/dev/null || true; done; }
+disable_svc() { for s in $1; do snapctl stop --disable "frappista.$s" 2>/dev/null || true; done; }
+
+enable_svc "$INFRA"
+
+if [ "$MODE" = "developer" ]; then
+  disable_svc "$APP"
+  disable_svc "nginx"
+
+  # Turn the install into an ordinary writable bench, so `bench update`,
+  # `switch-to-branch`, `get-app`, `new-app`, `pip install` and `build` all work
+  # the way they do on a normal Frappe install. ~1GB, once.
+  . "$SNAP/bin/snap-common.sh"
+  bootstrap_common
+  materialise_bench
+else
+  enable_svc "$APP"
+fi
+
+# developer_mode drives frappe itself: no asset caching, verbose errors, hooks
+# reloaded per request. Only writable once the bench has been bootstrapped.
+CFG="$SNAP_COMMON/bench/sites/common_site_config.json"
+if [ -f "$CFG" ]; then
+  if [ "$MODE" = "developer" ]; then DEV=1; else DEV=0; fi
+  "$SNAP/opt/frappe-bench/env/bin/python3.14" - "$CFG" "$DEV" <<'PYEOF' || true
+import json, sys
+path, dev = sys.argv[1], int(sys.argv[2])
+with open(path) as fh:
+    cfg = json.load(fh)
+cfg["developer_mode"] = dev
+with open(path, "w") as fh:
+    json.dump(cfg, fh, indent=1)
+PYEOF
+fi
+
+# `bench watch` rebuilds assets on change. Only meaningful in developer mode, and
+# even then it is opt-in: snap set frappista watch=true
+WATCH=$(snapctl get watch 2>/dev/null || true)
+if [ "$MODE" = "developer" ] && [ "$WATCH" = "true" ]; then
+  enable_svc "watch"
+else
+  disable_svc "watch"
+fi
+
+# Optional reverse proxy, production only.
+NGINX=$(snapctl get nginx 2>/dev/null || true)
+if [ "$MODE" = "production" ] && [ "$NGINX" = "true" ]; then
+  enable_svc "nginx"
+fi
+
+# Recycle the web daemon so a mode/bind change takes effect. Guarded: this hook
+# also runs during the initial install, before the service exists.
+if [ "$MODE" = "production" ]; then
+  snapctl restart frappista.web 2>/dev/null || true
+fi

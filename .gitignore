@@ -1,0 +1,7 @@
+dist/
+*.deb
+*.rpm
+*.snap
+parts/
+prime/
+stage/

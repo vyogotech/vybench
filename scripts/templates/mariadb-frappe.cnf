@@ -1,0 +1,20 @@
+# Frappe requires utf8mb4 end to end. Without this, `bench new-site` fails at
+# table creation ("Specified key was too long") or silently mangles non-ASCII
+# data, because MariaDB's own default is still latin1/utf8mb3 on several distros.
+#
+# Installed as:
+#   Debian/Ubuntu  /etc/mysql/mariadb.conf.d/10-frappe.cnf
+#   RHEL/Fedora    /etc/my.cnf.d/10-frappe.cnf
+
+[mysqld]
+character-set-client-handshake = FALSE
+character-set-server = utf8mb4
+collation-server = utf8mb4_unicode_ci
+innodb-file-per-table = 1
+# Frappe ships large fixtures and patch payloads; the 16M default truncates them.
+max-allowed-packet = 256M
+# The application tier is local, so there is no reason to accept remote clients.
+bind-address = 127.0.0.1
+
+[mysql]
+default-character-set = utf8mb4

@@ -1,0 +1,16 @@
+#!/bin/bash
+set -e
+
+. "$SNAP/bin/snap-common.sh"
+
+bootstrap_common
+cd "$SNAP_COMMON/bench"
+
+# Node's realtime server. It resolves node_modules relative to the script's own
+# location (apps/frappe/node_modules), so it must be launched by path from the
+# bench root -- exactly as bench's Procfile does:
+#   socketio: {{ node }} apps/frappe/socketio.js
+export PATH="$SNAP/bin:$PATH"
+export NODE_PATH="$BENCH_ROOT/apps/frappe/node_modules"
+
+run_as_daemon "$SNAP/bin/node" "$BENCH_ROOT/apps/frappe/socketio.js"

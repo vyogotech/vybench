@@ -1,0 +1,346 @@
+#!/usr/bin/env bash
+# frappista-setup -- first-run configuration for the native .deb / .rpm install.
+#
+# The package deliberately does NOT do this work from postinst. Creating a
+# database, a site and an nginx vhost are choices an administrator makes, not
+# side effects of `apt install`; and postinst runs in contexts (image builds,
+# chroots) where mariadb is not running at all.
+#
+# Everything here is idempotent: re-running it after adding a site, changing a
+# port, or reinstalling the package is safe and expected.
+set -euo pipefail
+
+BENCH=/opt/frappe-bench
+BENCH_PY="$BENCH/env/bin/python3"
+BENCH_CLI="$BENCH/env/bin/bench"
+CONF="$BENCH/sites/common_site_config.json"
+ETC=/etc/frappista
+
+SITE="dev.localhost"
+ADMIN_PW="admin"
+NGINX_PORT=80
+QUEUES="default short long"
+DO_NGINX=1
+DO_SITE=1
+DO_SERVICES=1
+DO_INSTALL_APPS=1
+
+usage() {
+  cat <<'EOF'
+Usage: frappista-setup [options]
+
+  --site NAME            site to create (default: dev.localhost)
+  --admin-password PW    Administrator password (default: admin)
+  --nginx-port PORT      port for the nginx vhost (default: 80)
+  --queues "a b c"       worker queues to run (default: "default short long")
+  --no-site              skip site creation
+  --no-install-apps      create the site with frappe only; skip erpnext etc.
+  --no-nginx             skip the nginx vhost
+  --no-services          configure only; do not enable/start systemd units
+  -h, --help             this text
+
+Run again at any time; every step is idempotent.
+EOF
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --site)           SITE="$2"; shift 2 ;;
+    --admin-password) ADMIN_PW="$2"; shift 2 ;;
+    --nginx-port)     NGINX_PORT="$2"; shift 2 ;;
+    --queues)         QUEUES="$2"; shift 2 ;;
+    --no-site)        DO_SITE=0; shift ;;
+    --no-install-apps) DO_INSTALL_APPS=0; shift ;;
+    --no-nginx)       DO_NGINX=0; shift ;;
+    --no-services)    DO_SERVICES=0; shift ;;
+    -h|--help)        usage; exit 0 ;;
+    *) echo "frappista-setup: unknown option '$1'" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+[ "$(id -u)" = "0" ] || { echo "frappista-setup must run as root" >&2; exit 1; }
+
+# Check both up front. Discovering a broken venv halfway through -- after the
+# database account has already been created -- leaves the system in a state that
+# is neither configured nor clean, and the error surfaces as a bare
+# "No such file or directory" on some line number.
+for f in "$BENCH_CLI" "$BENCH_PY"; do
+  [ -x "$f" ] || { echo "frappista-setup: $f is missing or not executable." >&2
+    echo "                 The bench payload is incomplete -- reinstall the package." >&2
+    exit 1; }
+done
+
+say() { printf '==> %s\n' "$*"; }
+
+# Run a command as the frappe service account. runuser is part of util-linux and
+# is present on every systemd distribution, unlike sudo which minimal RHEL
+# images do not ship.
+as_frappe() { runuser -u frappe -- env HOME="$BENCH" "$@"; }
+
+# ---------------------------------------------------------------------------
+# 0. Distribution differences
+# ---------------------------------------------------------------------------
+if [ -f /etc/debian_version ]; then
+  FAMILY=debian; REDIS_SVC=redis-server.service
+else
+  FAMILY=rhel;   REDIS_SVC=redis.service
+fi
+MARIADB_SVC=mariadb.service
+
+# The client binary is `mariadb` on current releases and `mysql` on older ones.
+if command -v mariadb >/dev/null 2>&1; then DB_CLI=mariadb
+elif command -v mysql >/dev/null 2>&1; then DB_CLI=mysql
+else echo "frappista-setup: no mariadb/mysql client found" >&2; exit 1; fi
+
+# ---------------------------------------------------------------------------
+# 1. Datastores
+# ---------------------------------------------------------------------------
+say "starting MariaDB and Redis"
+systemctl enable --now "$MARIADB_SVC" "$REDIS_SVC"
+
+for _ in $(seq 1 60); do
+  "$DB_CLI" --protocol=socket -u root -e 'SELECT 1' >/dev/null 2>&1 && break
+  sleep 1
+done
+
+# ---------------------------------------------------------------------------
+# 2. Bench skeleton
+# ---------------------------------------------------------------------------
+# bench's is_bench_directory() requires ALL of apps, sites, config, logs and
+# config/pids. Miss one and bench silently stops loading frappe's subcommands,
+# so `bench worker` fails with "No such command 'worker'". Cheap to guarantee.
+say "checking bench layout"
+install -d -o frappe -g frappe -m 2770 \
+  "$BENCH/apps" "$BENCH/sites" "$BENCH/config" "$BENCH/config/pids" "$BENCH/logs"
+
+if [ ! -f "$BENCH/sites/apps.txt" ]; then
+  echo "frappista-setup: $BENCH/sites/apps.txt is missing -- the payload is incomplete" >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Database administrator account
+# ---------------------------------------------------------------------------
+# `bench new-site` needs a database account that can CREATE DATABASE and GRANT.
+# It reads root_login/root_password from common_site_config.json, and treats a
+# falsy password as "prompt me" -- which under any non-interactive caller ends
+# in EOFError. So a real password has to exist before the first site is created.
+#
+# A dedicated account rather than the system root account: on Debian and RHEL
+# alike, MariaDB's root uses unix_socket authentication, and giving it a
+# password would break `mysql` for the system administrator.
+DB_ADMIN=frappe_admin
+
+current_root_pw() {
+  "$BENCH_PY" - "$CONF" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    with open(sys.argv[1]) as fh:
+        print(json.load(fh).get("root_password") or "")
+except Exception:
+    print("")
+PY
+}
+
+DB_PW="$(current_root_pw)"
+if [ -z "$DB_PW" ]; then
+  say "provisioning database administrator '$DB_ADMIN'"
+  # `head -c` on /dev/urandom first, then cut -- piping tr straight into a second
+  # `head` gives tr a SIGPIPE, which under `set -o pipefail` aborts the script.
+  DB_PW="$(head -c 512 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9' | cut -c1-24)"
+  [ ${#DB_PW} -eq 24 ] || { echo "frappista-setup: password generation failed" >&2; exit 1; }
+
+  "$DB_CLI" --protocol=socket -u root <<SQL
+CREATE USER IF NOT EXISTS '$DB_ADMIN'@'localhost' IDENTIFIED BY '$DB_PW';
+CREATE USER IF NOT EXISTS '$DB_ADMIN'@'127.0.0.1' IDENTIFIED BY '$DB_PW';
+ALTER USER '$DB_ADMIN'@'localhost' IDENTIFIED BY '$DB_PW';
+ALTER USER '$DB_ADMIN'@'127.0.0.1' IDENTIFIED BY '$DB_PW';
+GRANT ALL PRIVILEGES ON *.* TO '$DB_ADMIN'@'localhost' WITH GRANT OPTION;
+GRANT ALL PRIVILEGES ON *.* TO '$DB_ADMIN'@'127.0.0.1' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+SQL
+
+  "$BENCH_PY" - "$CONF" "$DB_ADMIN" "$DB_PW" <<'PY'
+import json, sys
+path, user, pw = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path) as fh:
+    cfg = json.load(fh)
+# frappe reads root_login/root_password; bench's newer new-site also honours
+# db_root_username. Write both so neither path prompts.
+cfg["root_login"] = user
+cfg["root_password"] = pw
+cfg["db_root_username"] = user
+with open(path, "w") as fh:
+    json.dump(cfg, fh, indent=1, sort_keys=True)
+PY
+  # Unlike the snap's world-readable config, this one holds a credential that
+  # actually grants full database access, so keep it off other local users.
+  chown frappe:frappe "$CONF"
+  chmod 0640 "$CONF"
+fi
+
+# ---------------------------------------------------------------------------
+# 4. Site
+# ---------------------------------------------------------------------------
+if [ "$DO_SITE" = "1" ]; then
+  if [ -d "$BENCH/sites/$SITE" ]; then
+    say "site '$SITE' already exists -- skipping creation"
+  else
+    say "creating site '$SITE'"
+    # The flag was renamed from --mariadb-root-username to --db-root-username;
+    # ask this bench which one it understands rather than guessing.
+    if as_frappe "$BENCH_CLI" new-site --help 2>/dev/null | grep -q -- '--db-root-username'; then
+      ROOT_USER_FLAG=--db-root-username
+      ROOT_PW_FLAG=--db-root-password
+    else
+      ROOT_USER_FLAG=--mariadb-root-username
+      ROOT_PW_FLAG=--mariadb-root-password
+    fi
+
+    ( cd "$BENCH" && as_frappe "$BENCH_CLI" new-site "$SITE" \
+        "$ROOT_USER_FLAG" "$DB_ADMIN" \
+        "$ROOT_PW_FLAG" "$DB_PW" \
+        --admin-password "$ADMIN_PW" )
+
+    ( cd "$BENCH" && as_frappe "$BENCH_CLI" use "$SITE" )
+
+    # `new-site` installs frappe and nothing else. On a payload that ships
+    # ERPNext, skipping this leaves the operator with a bare Frappe desk and no
+    # obvious reason why -- the app is present on disk and simply not installed
+    # into the site. Install everything the payload actually carries.
+    if [ "$DO_INSTALL_APPS" = "1" ]; then
+      while read -r app; do
+        [ -n "$app" ] || continue
+        [ "$app" = "frappe" ] && continue          # already installed by new-site
+        say "installing app '$app' into $SITE (this takes a few minutes)"
+        ( cd "$BENCH" && as_frappe "$BENCH_CLI" --site "$SITE" install-app "$app" )
+      done < "$BENCH/sites/apps.txt"
+    fi
+  fi
+
+  # The frappe-scheduler unit is the process; this is the per-site switch. Both
+  # are required, and a site is created with its scheduler disabled.
+  ( cd "$BENCH" && as_frappe "$BENCH_CLI" --site "$SITE" scheduler enable ) || true
+fi
+
+# ---------------------------------------------------------------------------
+# 5. nginx
+# ---------------------------------------------------------------------------
+if [ "$DO_NGINX" = "1" ]; then
+  say "configuring nginx on port $NGINX_PORT"
+
+  NAMESERVER=$(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf 2>/dev/null || true)
+  [ -n "$NAMESERVER" ] || NAMESERVER=127.0.0.1
+
+  export BENCH_SITES="$BENCH/sites"
+  export NGINX_PORT
+  export BACKEND="127.0.0.1:8000"
+  export SOCKETIO="127.0.0.1:9000"
+  export NAMESERVER
+  export UPSTREAM_REAL_IP_ADDRESS=127.0.0.1
+  export UPSTREAM_REAL_IP_HEADER=X-Forwarded-For
+  export UPSTREAM_REAL_IP_RECURSIVE=off
+  export FRAPPE_SITE_NAME_HEADER='$host'
+  export PROXY_READ_TIMEOUT=120
+  export CLIENT_MAX_BODY_SIZE=50m
+
+  # shellcheck disable=SC2016
+  envsubst '${BENCH_SITES}
+    ${NGINX_PORT}
+    ${BACKEND}
+    ${SOCKETIO}
+    ${NAMESERVER}
+    ${UPSTREAM_REAL_IP_ADDRESS}
+    ${UPSTREAM_REAL_IP_HEADER}
+    ${UPSTREAM_REAL_IP_RECURSIVE}
+    ${FRAPPE_SITE_NAME_HEADER}
+    ${PROXY_READ_TIMEOUT}
+    ${CLIENT_MAX_BODY_SIZE}' \
+    < "$ETC/nginx/frappe.conf.template" > /etc/nginx/conf.d/frappe.conf
+
+  # The rendered vhost has server_name '$host' -- a literal that matches no real
+  # Host header -- so it only ever receives traffic as the DEFAULT server for
+  # its port. That works on RHEL, where conf.d is included before nginx.conf's
+  # own server block, but not on Debian, where sites-enabled/default claims
+  # `default_server` outright. Retire it, the same thing `bench setup production`
+  # does. Renamed rather than deleted so it is recoverable.
+  if [ "$FAMILY" = "debian" ] && [ -e /etc/nginx/sites-enabled/default ]; then
+    say "disabling the stock nginx site (moved to sites-available/default.frappista-disabled)"
+    mv -f /etc/nginx/sites-enabled/default \
+          /etc/nginx/sites-available/default.frappista-disabled 2>/dev/null || \
+      rm -f /etc/nginx/sites-enabled/default
+  fi
+
+  # nginx serves /assets and /files straight off disk, so its worker process
+  # needs read access to the bench. Give it group membership rather than opening
+  # the tree to the world: sites/*/private holds uploaded documents and
+  # site_config.json holds the database password, and `internal;` in the vhost
+  # is an nginx-level restriction, not a filesystem one.
+  NGINX_USER="$(awk '$1=="user"{gsub(/;/,"",$2); print $2; exit}' /etc/nginx/nginx.conf 2>/dev/null || true)"
+  if [ -z "$NGINX_USER" ]; then
+    [ "$FAMILY" = "debian" ] && NGINX_USER=www-data || NGINX_USER=nginx
+  fi
+  if getent passwd "$NGINX_USER" >/dev/null 2>&1 && ! id -nG "$NGINX_USER" | tr ' ' '\n' | grep -qx frappe; then
+    say "adding '$NGINX_USER' to the frappe group so nginx can read the bench"
+    usermod -aG frappe "$NGINX_USER"
+    NGINX_NEEDS_RESTART=1
+  fi
+
+  nginx -t
+  systemctl enable --now nginx
+  # Supplementary groups are read at process start, so a reload would leave the
+  # existing workers without the frappe group and every /assets request would
+  # 403. Restart when the membership actually changed.
+  if [ "${NGINX_NEEDS_RESTART:-0}" = "1" ]; then
+    systemctl restart nginx
+  else
+    systemctl reload nginx
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 6. Services
+# ---------------------------------------------------------------------------
+if [ "$DO_SERVICES" = "1" ]; then
+  say "enabling application services"
+  UNITS="frappe-web.service frappe-scheduler.service frappe-socketio.service"
+  for q in $QUEUES; do UNITS="$UNITS frappe-worker@$q.service"; done
+
+  systemctl daemon-reload
+  # shellcheck disable=SC2086
+  systemctl enable --now frappista.target $UNITS
+
+  sleep 3
+  FAILED=""
+  # shellcheck disable=SC2086
+  for u in $UNITS; do
+    systemctl is-active --quiet "$u" || FAILED="$FAILED $u"
+  done
+  if [ -n "$FAILED" ]; then
+    echo "WARNING: these units are not active:$FAILED" >&2
+    echo "         inspect with: journalctl -u <unit> -n 50" >&2
+  fi
+fi
+
+cat <<EOF
+
+Frappista is set up.
+
+  Site       : $SITE
+  URL        : http://$SITE$([ "$NGINX_PORT" = "80" ] || echo ":$NGINX_PORT")/
+  Login       : Administrator / $ADMIN_PW
+
+If '$SITE' does not resolve, add it to /etc/hosts on the machine you browse from:
+
+  echo "127.0.0.1 $SITE" | sudo tee -a /etc/hosts
+
+Manage the stack:
+
+  systemctl status frappe-web frappe-scheduler frappe-socketio
+  systemctl restart frappista.target
+  journalctl -u frappe-web -f
+
+Run bench commands as the service account:
+
+  sudo -u frappe -H $BENCH_CLI --site $SITE migrate
+EOF
