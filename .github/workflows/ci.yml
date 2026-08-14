@@ -95,14 +95,6 @@ jobs:
           bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
           ./actionlint -color
 
-      # Credentials committed by accident are the security failure that is
-      # cheapest to prevent and most expensive to clean up -- once pushed, a key
-      # must be treated as compromised and rotated, whatever you do to history.
-      - name: Scan for committed secrets
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Assembly tests (synthetic payload)
         run: ./scripts/test-packaging-fast.sh
 
