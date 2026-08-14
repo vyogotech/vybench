@@ -1,4 +1,4 @@
-# Frappium
+# frappium
 
 Frappe v16 / ERPNext, packaged.
 
