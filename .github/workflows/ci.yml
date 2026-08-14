@@ -104,6 +104,13 @@ jobs:
         run: |
           python3 - <<'PY'
           import glob, sys, yaml
+
+          # Built by concatenation, never written literally: GitHub interpolates
+          # an expression opener inside a run: block before the shell sees it, so
+          # the literal form would be silently replaced (and actionlint rejects
+          # it outright as an unterminated expression).
+          EXPR = "$" + "{{"
+
           bad = []
           for f in glob.glob('.github/workflows/*.yml'):
               wf = yaml.safe_load(open(f))
@@ -113,7 +120,7 @@ jobs:
                       continue
                   # A literal (non-expression) matrix must have at least one entry.
                   if isinstance(m, dict) and not any(
-                      (isinstance(v, list) and v) or (isinstance(v, str) and '${{' in v)
+                      (isinstance(v, list) and v) or (isinstance(v, str) and EXPR in v)
                       for v in m.values()
                   ):
                       bad.append(f"{f}:{name}")
