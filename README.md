@@ -1,4 +1,6 @@
-# Frappista Packaging
+# Frappium
+
+Frappe v16 / ERPNext, packaged.
 
 Builds Frappe v16 / ERPNext as installable native packages:
 
