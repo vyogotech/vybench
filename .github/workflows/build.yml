@@ -1,0 +1,205 @@
+name: Build Packages
+
+# Replaces the previous package-release.yml + snap-build.yaml pair, which both
+# built snaps and disagreed about how.
+#
+# Triggers: tags and manual dispatch only, never push.
+# One full run is ~2 hours of runner time -- each .deb job compiles CPython 3.14
+# from source, runs `bench init` and builds the frontend assets, and the snap does
+# the same again inside LXD. On a PRIVATE repository those minutes are metered
+# (2,000/month on Free, 3,000 on Team), so a push trigger drains the quota in days.
+# Iterate locally with scripts/build-bench-payload.sh -- it is the same code path.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Package version (default: taken from the built frappe)'
+        required: false
+        default: ''
+      include_arm64:
+        description: 'Also build arm64 (needs Team+ for private repos)'
+        type: boolean
+        required: false
+        default: false
+      publish_snap:
+        description: 'Publish the snap to the Snap Store'
+        type: boolean
+        required: false
+        default: false
+
+# A second tag push should not leave two 2-hour runs racing each other.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # .deb -- one job per distribution, all running concurrently with the snap job
+  # ---------------------------------------------------------------------------
+  deb:
+    name: deb · ${{ matrix.distro }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      # One distribution failing must not cancel the others; a partial set of
+      # artefacts is far more useful than none when a build breaks.
+      fail-fast: false
+      matrix:
+        distro: ['ubuntu:24.04', 'debian:12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Slug
+        id: s
+        run: echo "slug=$(echo '${{ matrix.distro }}' | tr ':' '-')" >> "$GITHUB_OUTPUT"
+
+      # Builds the bench at /opt/frappe-bench inside a container of the target
+      # distribution -- the same path the package installs to, which is what keeps
+      # pyvenv.cfg and the sites/assets symlinks valid on the target machine.
+      - name: Build bench payload
+        run: |
+          ./scripts/build-bench-payload.sh \
+            --distro "${{ matrix.distro }}" \
+            --frappe-branch version-16 \
+            --apps erpnext \
+            --engine docker \
+            --output ./dist
+
+      - name: Build .deb
+        run: |
+          ARGS=(--output ./dist)
+          [ -n "${{ inputs.version }}" ] && ARGS+=(--version "${{ inputs.version }}")
+          ./scripts/package-deb.sh "${ARGS[@]}"
+
+      # A package that installs cleanly and then fails to run is the worst
+      # outcome, and is exactly what the .deb this project replaced used to do.
+      # Install it in a clean systemd container and assert the services come up.
+      - name: Verify in a clean container
+        run: ./scripts/test-native-package.sh --distro "${{ matrix.distro }}" --engine docker
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ steps.s.outputs.slug }}
+          path: dist/*.deb
+          retention-days: 30
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # snap -- concurrent with the .deb jobs
+  # ---------------------------------------------------------------------------
+  snap:
+    name: snap · ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        # arm64 is opt-in: GitHub's arm64 runners are not available to private
+        # repositories on the Free plan, and an unavailable label queues forever
+        # rather than failing fast.
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+        exclude:
+          - arch: ${{ (inputs.include_arm64 || startsWith(github.ref, 'refs/tags/')) && 'none' || 'arm64' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Canonical's official action. It provisions LXD correctly, which the
+      # previous hand-rolled setup could not: `usermod -aG lxd $USER` followed by
+      # `newgrp lxd` inside one `run:` step cannot affect later steps, so
+      # snapcraft always came back with "LXD requires additional permissions".
+      - name: Build snap
+        id: build
+        uses: snapcore/action-build@v1
+        with:
+          # Omits snap/manifest.yaml. The store uses it to flag vulnerable
+          # stage-packages, but it also enumerates everything the snap was built
+          # from -- which this being a private, commercial artefact argues against.
+          build-info: false
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: snap-${{ matrix.arch }}
+          path: ${{ steps.build.outputs.snap }}
+          retention-days: 30
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # release -- only once every build above has succeeded
+  # ---------------------------------------------------------------------------
+  release:
+    name: Release
+    needs: [deb, snap]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect
+        run: |
+          mkdir -p dist
+          find artifacts -type f \( -name '*.deb' -o -name '*.snap' \) -exec mv -t dist/ {} +
+          ls -lh dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          body: |
+            Frappe v16 / ERPNext as installable packages.
+
+            The `.deb` builds are **distribution-specific**: each bundles a
+            CPython 3.14 compiled against that release's OpenSSL and sqlite.
+            Pick the file matching your system. The `.snap` runs anywhere with
+            `snapd`.
+
+            ```bash
+            sudo apt install ./frappista_*~ubuntu2404_*.deb
+            sudo frappista-setup --site dev.localhost --admin-password admin
+            ```
+
+            See `docs/native-install.md` and `docs/snap-install.md`.
+
+  publish-snap:
+    name: Publish snap
+    needs: snap
+    if: inputs.publish_snap || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: snap-amd64
+
+      - name: Locate the snap and check credentials
+        id: find
+        run: |
+          # Do not hardcode the filename: it carries the version from
+          # snapcraft.yaml, so a version bump would silently break publishing.
+          snap_file="$(find . -maxdepth 2 -name '*.snap' | head -1)"
+          [ -n "$snap_file" ] || { echo "::error::no .snap in the downloaded artifact"; exit 1; }
+          echo "snap=$snap_file" >> "$GITHUB_OUTPUT"
+          echo "found $snap_file"
+
+          # action-publish fails opaquely without credentials; say why instead.
+          [ -n "${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}" ] || {
+            echo "::error::SNAPCRAFT_STORE_CREDENTIALS is not set in this repository's secrets."
+            exit 1; }
+
+      - uses: snapcore/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        with:
+          snap: ${{ steps.find.outputs.snap }}
+          # Tags land in edge and are promoted deliberately, not automatically.
+          release: edge
