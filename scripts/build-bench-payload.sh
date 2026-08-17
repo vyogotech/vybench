@@ -425,7 +425,7 @@ PY
   done
 
   # --- slim ----------------------------------------------------------------
-  rm -rf /home/frappe/.cache /root/.cache /tmp/bench-bootstrap
+  rm -rf /root/.cache /tmp/bench-bootstrap
   find "$BENCH_DIR" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
   find "$BENCH_DIR" -name '*.pyc' -delete 2>/dev/null || true
 
