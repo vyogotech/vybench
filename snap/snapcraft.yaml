@@ -43,7 +43,6 @@ environment:
 apps:
   bench:
     command: bin/bench-wrapper
-    plugs: [network, network-bind, home]
 
   mariadb:
     command: bin/mariadb-wrapper
@@ -114,7 +113,6 @@ apps:
 
   mysqldump:
     command: usr/bin/mariadb-dump
-    plugs: [network, network-bind, home]
 
   redis-cli:
     command: usr/bin/redis-cli
@@ -348,3 +346,7 @@ parts:
 
       # Ensure all files in opt are globally readable and executable
       chmod -R a+rX $SNAPCRAFT_PART_INSTALL/opt
+
+      # Remove external symlinks created by pip/node that fail snapcraft validation
+      rm -f $SNAPCRAFT_PART_INSTALL/opt/frappe-bench/apps/frappe/frappe/public/node_modules
+      rm -f $SNAPCRAFT_PART_INSTALL/usr/lib/python3.14/sitecustomize.py
