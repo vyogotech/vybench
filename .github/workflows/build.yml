@@ -112,6 +112,14 @@ jobs:
         run: |
           echo "slug=$(echo '${{ matrix.distro }}' | tr ':' '-')-$(uname -m)" >> "$GITHUB_OUTPUT"
 
+      - name: Cache pip and yarn
+        uses: actions/cache@v4
+        with:
+          path: .build-cache
+          key: deb-${{ matrix.distro }}-${{ matrix.runner }}-${{ hashFiles('scripts/build-bench-payload.sh') }}
+          restore-keys: |
+            deb-${{ matrix.distro }}-${{ matrix.runner }}-
+
       # Builds the bench at /opt/frappe-bench inside a container of the target
       # distribution -- the same path the package installs to, which is what keeps
       # pyvenv.cfg and the sites/assets symlinks valid on the target machine.
@@ -157,6 +165,14 @@ jobs:
         include: ${{ fromJSON(needs.matrix.outputs.snap) }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Cache Snapcraft
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/snapcraft
+          key: snap-${{ matrix.arch }}-${{ hashFiles('snap/snapcraft.yaml') }}
+          restore-keys: |
+            snap-${{ matrix.arch }}-
 
       # Canonical's official action. It provisions LXD correctly, which the
       # previous hand-rolled setup could not: `usermod -aG lxd $USER` followed by

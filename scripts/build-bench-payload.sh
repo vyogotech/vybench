@@ -505,10 +505,14 @@ OUTPUT_ABS="$(cd "$OUTPUT" && pwd)"
 
 # :z relabels for SELinux (mandatory on Fedora/RHEL hosts with podman); docker
 # accepts the same suffix.
+mkdir -p "$ROOT_DIR/.build-cache"
+chmod 777 "$ROOT_DIR/.build-cache" || true
+
 echo "==> $ENGINE run $DISTRO -- building bench payload at $BENCH_DIR"
 exec "$ENGINE" run --rm \
   -v "$ROOT_DIR":/src:ro,z \
   -v "$OUTPUT_ABS":/out:z \
+  -v "$ROOT_DIR/.build-cache":/home/frappe/.cache:z \
   -e VYBENCH_BUILD_INNER=1 \
   -e DISTRO="$DISTRO" \
   -e FRAPPE_BRANCH="$FRAPPE_BRANCH" \
