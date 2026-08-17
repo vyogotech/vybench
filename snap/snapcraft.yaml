@@ -12,7 +12,12 @@ issues: https://github.com/vyogotech/vybench/issues
 source-code: https://github.com/vyogotech/vybench
 website: https://github.com/vyogotech/vybench
 base: core24
-confinement: classic
+# Strict, not classic. Classic is reserved for snaps that must drive arbitrary
+# host toolchains, and the store grants it per-name only after a forum review --
+# which a self-contained server stack does not qualify for. Nothing here needs
+# it: every writable path is under $SNAP_COMMON, privileges are dropped to the
+# snapd-managed snap_daemon account, and configuration goes through snapctl.
+confinement: strict
 
 # snapd creates this system account at install time on every distribution, giving
 # the daemons a portable non-root identity. Nothing in this snap runs as root:
@@ -40,19 +45,41 @@ environment:
   LC_ALL: C.UTF-8
   LANG: C.UTF-8
 
+  # Debian's git has /usr/lib/git-core compiled in as its subcommand directory.
+  # Under classic that resolved to the host's copy; under strict it resolves
+  # inside the snap's mount namespace to the core24 base, which ships no git --
+  # so every subcommand dies with "'clone' is not a git command". bench update,
+  # get-app and switch-to-branch are all git-backed, so point git at our own.
+  GIT_EXEC_PATH: $SNAP/usr/lib/git-core
+  GIT_TEMPLATE_DIR: $SNAP/usr/share/git-core/templates
+
+  # Same class of problem for wkhtmltopdf, which frappe shells out to for every
+  # PDF print format: fontconfig's default config path is absolute, and the base
+  # snap has neither the config nor any fonts. Without these it renders blank or
+  # tofu-filled PDFs instead of failing loudly.
+  FONTCONFIG_FILE: $SNAP/etc/fonts/fonts.conf
+  FONTCONFIG_PATH: $SNAP/etc/fonts
+
 apps:
+  # `home` (auto-connects on distros with classic snap support) is what lets
+  # `bench restore ~/backup.sql.gz` and `bench backup --with-files` reach the
+  # invoking user's files. `removable-media` covers backups on an external disk
+  # and is NOT auto-connected -- `snap connect vybench:removable-media` if wanted.
   bench:
     command: bin/bench-wrapper
+    plugs: [network, network-bind, home, removable-media]
 
   mariadb:
     command: bin/mariadb-wrapper
     daemon: simple
     restart-condition: always
+    plugs: [network, network-bind]
 
   redis:
     command: bin/redis-wrapper
     daemon: simple
     restart-condition: always
+    plugs: [network, network-bind]
 
   # Web server. Serves gunicorn in production mode and `bench serve` (auto-reload)
   # in developer mode; the wrapper branches on `snapctl get mode`.
@@ -60,36 +87,45 @@ apps:
     command: bin/web-wrapper
     daemon: simple
     restart-condition: always
+    plugs: [network, network-bind]
 
   # One worker per queue, mirroring the supervisor programs that
   # `bench setup production` generates. Running only the default queue silently
   # strands every job enqueued to short/long.
+  #
+  # The workers get `home` because background jobs are what actually perform
+  # backups and file imports/exports on the user's behalf.
   worker:
     command: bin/worker-wrapper default
     daemon: simple
     restart-condition: always
+    plugs: [network, network-bind, home]
 
   worker-short:
     command: bin/worker-wrapper short
     daemon: simple
     restart-condition: always
+    plugs: [network, network-bind, home]
 
   worker-long:
     command: bin/worker-wrapper long
     daemon: simple
     restart-condition: always
+    plugs: [network, network-bind, home]
 
   # Without this, nothing scheduled ever runs: no email queue flush, no auto-repeat.
   scheduler:
     command: bin/scheduler-wrapper
     daemon: simple
     restart-condition: always
+    plugs: [network, network-bind]
 
   # Node realtime server. Frappe's live updates/notifications need this.
   socketio:
     command: bin/socketio-wrapper
     daemon: simple
     restart-condition: always
+    plugs: [network, network-bind]
 
   # Developer-mode asset rebuilder. Off unless `snap set vybench mode=developer`.
   watch:
@@ -97,6 +133,7 @@ apps:
     daemon: simple
     restart-condition: always
     install-mode: disable
+    plugs: [network, network-bind]
 
   # Opt-in reverse proxy. Disabled by default because binding :80 collides with
   # any web server already on the host, and gunicorn already serves statics.
@@ -106,17 +143,22 @@ apps:
     daemon: simple
     restart-condition: always
     install-mode: disable
+    plugs: [network, network-bind]
 
+  # Client tools: they connect, they never listen, so no network-bind. `home` is
+  # what makes redirection useful -- `vybench.mysqldump db > ~/dump.sql` writes
+  # to the invoking user's directory, and `mysql < ~/schema.sql` reads from it.
   mysql:
     command: usr/bin/mariadb
-    plugs: [network, network-bind]
+    plugs: [network, home]
 
   mysqldump:
     command: usr/bin/mariadb-dump
+    plugs: [network, home]
 
   redis-cli:
     command: usr/bin/redis-cli
-    plugs: [network, network-bind]
+    plugs: [network, home]
 
 parts:
   # ── 0. Launcher wrappers ────────────────────────────────────────────────────
@@ -154,6 +196,14 @@ parts:
       - xfonts-75dpi
       - xfonts-encodings
       - xfonts-utils
+      # Under classic, wkhtmltopdf fell back to the host's fontconfig and fonts.
+      # Strict confinement cuts that off, so both have to ship in the snap or
+      # every generated PDF comes out blank. Liberation covers the metric-
+      # compatible Arial/Times/Courier substitutes frappe's print formats assume.
+      - fontconfig
+      - fontconfig-config
+      - fonts-liberation
+      - fonts-dejavu-core
 
   # ── 2. Redis (compiled from source with MALLOC=libc for cross-arch safety) ──
   redis-server:

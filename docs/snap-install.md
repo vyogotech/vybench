@@ -10,13 +10,22 @@ host, so there are no library or OpenSSL conflicts between distributions.
 ## 1. Install
 
 ```bash
-sudo snap install vybench --classic
+sudo snap install vybench
 ```
 
 Local build:
 
 ```bash
-sudo snap install --dangerous --classic vybench_16.0.0_amd64.snap
+sudo snap install --dangerous vybench_16.0.0_amd64.snap
+```
+
+Vybench is strictly confined, so it needs no `--classic` flag. The `home`
+interface auto-connects on install, which is what lets `bench backup` and
+`bench restore` reach files in your home directory. If you keep backups on an
+external drive, connect the one interface that is not automatic:
+
+```bash
+sudo snap connect vybench:removable-media
 ```
 
 The install starts MariaDB and Redis, generates a random database root

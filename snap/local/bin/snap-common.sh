@@ -243,10 +243,16 @@ EOF
 
 # Exec "$@" as snap_daemon. When already unprivileged (the bench CLI invoked by a
 # host user) exec directly -- there is nothing to drop.
+#
+# --clear-groups, not --init-groups. Under strict confinement snapd's seccomp
+# profile for a `system-usernames` snap permits setgroups(0, NULL) and nothing
+# else, so initgroups() -- which passes the account's real supplementary list --
+# is killed by the filter. Clearing is equivalent here anyway: the only group
+# that grants anything is the primary gid, which --regid already sets.
 run_as_daemon() {
   if [ "$(id -u)" = "0" ]; then
     export HOME="$SNAP_COMMON/bench"
-    exec setpriv --reuid="$DAEMON_USER" --regid="$DAEMON_USER" --init-groups "$@"
+    exec setpriv --reuid="$DAEMON_USER" --regid="$DAEMON_USER" --clear-groups "$@"
   fi
   exec "$@"
 }
@@ -259,7 +265,7 @@ run_as_daemon() {
 reexec_as_daemon() {
   if [ "$(id -u)" = "0" ]; then
     export HOME="$SNAP_COMMON/bench"
-    exec setpriv --reuid="$DAEMON_USER" --regid="$DAEMON_USER" --init-groups "$@"
+    exec setpriv --reuid="$DAEMON_USER" --regid="$DAEMON_USER" --clear-groups "$@"
   fi
 }
 
