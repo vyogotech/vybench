@@ -120,6 +120,30 @@ jobs:
           restore-keys: |
             deb-${{ matrix.distro }}-${{ matrix.runner }}-
 
+      - name: Resolve the pinned CPython version
+        id: py
+        run: |
+          # Parsed from the build script rather than repeated here: a hardcoded
+          # version in the cache key would keep serving the previous interpreter
+          # after a bump, and the mismatch would not show up until runtime.
+          v="$(sed -n 's/^PYTHON_VERSION="\([^"]*\)".*/\1/p' scripts/build-bench-payload.sh | head -1)"
+          [ -n "$v" ] || { echo "::error::could not parse PYTHON_VERSION from scripts/build-bench-payload.sh"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "cpython $v"
+
+      # Separate from the pip/yarn cache above, which is keyed on this script's
+      # hash and so is discarded on every edit to it. The interpreter takes
+      # minutes to compile and only changes when PYTHON_VERSION does.
+      #
+      # No restore-keys: the interpreter links against the distro's OpenSSL and
+      # libffi, so a prefix match across distro or arch would hand back an ABI
+      # -incompatible build. An exact hit or a rebuild, nothing in between.
+      - name: Cache the compiled CPython
+        uses: actions/cache@v4
+        with:
+          path: .build-cache-python
+          key: cpython-${{ steps.py.outputs.version }}-${{ matrix.distro }}-${{ runner.arch }}
+
       # Builds the bench at /opt/frappe-bench inside a container of the target
       # distribution -- the same path the package installs to, which is what keeps
       # pyvenv.cfg and the sites/assets symlinks valid on the target machine.

@@ -104,32 +104,68 @@ if [ "${VYBENCH_BUILD_INNER:-0}" = "1" ]; then
   esac
 
   # --- CPython, built at its final path ------------------------------------
-  echo "==> building CPython $PYTHON_VERSION into $PYTHON_HOME"
+  # The interpreter is compiled against the distribution's OpenSSL, libffi and
+  # sqlite, so a cached copy is valid ONLY for the exact distro+arch that built
+  # it -- reusing one across rows of the matrix would reintroduce precisely the
+  # ABI mismatch this from-source build exists to avoid. The version is in the
+  # key as well, so bumping PYTHON_VERSION invalidates every entry on its own
+  # rather than depending on someone remembering to purge the cache.
+  PY_CACHE_DIR="${PY_CACHE_DIR:-/pycache}"
+  PY_CACHE_TAR="$PY_CACHE_DIR/python-${PYTHON_VERSION}-$(echo "$DISTRO" | tr ':/' '--')-$(uname -m).tar.gz"
+
+  # 3.14.7 -> 3.14, which is what CPython actually names the installed binary.
+  # Derived rather than written out, so a PYTHON_VERSION bump does not leave a
+  # stale "python3.14" behind to be found only when the build fails.
+  PY_MM="${PYTHON_VERSION%.*}"
+
   rm -rf "$PYTHON_HOME" /tmp/pysrc
-  mkdir -p /tmp/pysrc "$(dirname "$PYTHON_HOME")"
-  curl -fsSL "https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tgz" \
-    | tar -xzf - --strip-components=1 -C /tmp/pysrc
-  (
-    cd /tmp/pysrc
-    # Deliberately NOT --enable-shared: without it libpython is linked into the
-    # interpreter binary, so it needs no LD_LIBRARY_PATH and cannot accidentally
-    # bind to a different libpython on the host. That is the entire class of
-    # problem that made the snap's OpenSSL collision so hard to pin down.
-    # Not --enable-optimizations either: PGO roughly quadruples build time for a
-    # gain that does not matter to a workload this I/O bound.
-    ./configure --prefix="$PYTHON_HOME" \
-                --with-ensurepip=install \
-                --enable-loadable-sqlite-extensions >/dev/null
-    make -j"$(nproc)" >/dev/null
-    make install >/dev/null
-  )
-  PYTHON_BIN="$PYTHON_HOME/bin/python3.14"
-  [ -x "$PYTHON_BIN" ] || { echo "FATAL: CPython build produced no $PYTHON_BIN" >&2; exit 1; }
+  mkdir -p "$(dirname "$PYTHON_HOME")"
+
+  if [ -f "$PY_CACHE_TAR" ]; then
+    echo "==> restoring CPython $PYTHON_VERSION from $(basename "$PY_CACHE_TAR")"
+    # Unpacked from /, because the archive stores $PYTHON_HOME as a path relative
+    # to it -- that is what puts the interpreter back at the exact prefix it was
+    # ./configure'd with. Anywhere else and pyvenv.cfg would point into thin air.
+    tar -xzf "$PY_CACHE_TAR" -C / || {
+      echo "NOTE: cache entry is unreadable; discarding it and building from source"
+      rm -rf "$PYTHON_HOME" "$PY_CACHE_TAR"
+    }
+  fi
+
+  PY_CACHE_FRESH=0
+  if [ ! -x "$PYTHON_HOME/bin/python$PY_MM" ]; then
+    echo "==> building CPython $PYTHON_VERSION into $PYTHON_HOME"
+    mkdir -p /tmp/pysrc
+    curl -fsSL "https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tgz" \
+      | tar -xzf - --strip-components=1 -C /tmp/pysrc
+    (
+      cd /tmp/pysrc
+      # Deliberately NOT --enable-shared: without it libpython is linked into the
+      # interpreter binary, so it needs no LD_LIBRARY_PATH and cannot accidentally
+      # bind to a different libpython on the host. That is the entire class of
+      # problem that made the snap's OpenSSL collision so hard to pin down.
+      # Not --enable-optimizations either: PGO roughly quadruples build time for a
+      # gain that does not matter to a workload this I/O bound.
+      ./configure --prefix="$PYTHON_HOME" \
+                  --with-ensurepip=install \
+                  --enable-loadable-sqlite-extensions >/dev/null
+      make -j"$(nproc)" >/dev/null
+      make install >/dev/null
+    )
+    PY_CACHE_FRESH=1
+  fi
+
+  PYTHON_BIN="$PYTHON_HOME/bin/python$PY_MM"
+  [ -x "$PYTHON_BIN" ] || { echo "FATAL: no $PYTHON_BIN after build/restore" >&2; exit 1; }
 
   # configure silently omits any stdlib module whose -dev headers were missing,
   # so verify the ones frappe actually needs rather than trusting the build.
   # ssl -> https and password hashing, sqlite3/lzma/bz2 -> backups,
   # ctypes -> several C extensions, readline -> `bench console`.
+  #
+  # Deliberately run against restored interpreters too, not just freshly built
+  # ones: a cache entry truncated by a cancelled job has to fail here, loudly,
+  # instead of surfacing as an ImportError deep inside bench init.
   "$PYTHON_BIN" - <<'PY'
 import sys
 missing = []
@@ -145,6 +181,24 @@ if missing:
 import ssl
 print(f"python {sys.version.split()[0]} ok, {ssl.OPENSSL_VERSION}")
 PY
+
+  # Populate the cache only now -- after the assertions above have passed, so a
+  # half-configured interpreter can never become the thing every later run
+  # restores. Skipped silently when no cache directory is mounted (the normal
+  # case for a one-off local build).
+  if [ "$PY_CACHE_FRESH" = "1" ] && [ -d "$PY_CACHE_DIR" ]; then
+    echo "==> caching CPython as $(basename "$PY_CACHE_TAR")"
+    # Write under a temporary name and rename into place: a job cancelled
+    # mid-write must not leave a truncated archive that the next run treats as a
+    # hit. rename(2) within one filesystem is atomic, so readers see all or none.
+    if tar -C / -czf "$PY_CACHE_TAR.tmp" "${PYTHON_HOME#/}" \
+       && mv -f "$PY_CACHE_TAR.tmp" "$PY_CACHE_TAR"; then
+      :
+    else
+      echo "NOTE: could not populate the CPython cache; continuing"
+      rm -f "$PY_CACHE_TAR.tmp"
+    fi
+  fi
 
   PY_XY="$("$PYTHON_BIN" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
   # Frappe v16 pins >=3.14,<3.15 exactly. Anything else fails at `pip install -e
@@ -508,11 +562,20 @@ OUTPUT_ABS="$(cd "$OUTPUT" && pwd)"
 mkdir -p "$ROOT_DIR/.build-cache"
 chmod 777 "$ROOT_DIR/.build-cache" || true
 
+# Separate from .build-cache on purpose. That one holds pip/yarn downloads and is
+# keyed in CI on this script's hash, so every edit here throws it away -- correct
+# for dependency caches, wasteful for a compiled interpreter that only changes
+# when PYTHON_VERSION does. Keeping them apart lets CI key each on what actually
+# invalidates it.
+mkdir -p "$ROOT_DIR/.build-cache-python"
+chmod 777 "$ROOT_DIR/.build-cache-python" || true
+
 echo "==> $ENGINE run $DISTRO -- building bench payload at $BENCH_DIR"
 exec "$ENGINE" run --rm \
   -v "$ROOT_DIR":/src:ro,z \
   -v "$OUTPUT_ABS":/out:z \
   -v "$ROOT_DIR/.build-cache":/home/frappe/.cache:z \
+  -v "$ROOT_DIR/.build-cache-python":/pycache:z \
   -e VYBENCH_BUILD_INNER=1 \
   -e DISTRO="$DISTRO" \
   -e FRAPPE_BRANCH="$FRAPPE_BRANCH" \

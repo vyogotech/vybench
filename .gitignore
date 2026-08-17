@@ -5,3 +5,8 @@ dist/
 parts/
 prime/
 stage/
+
+# Build caches created by scripts/build-bench-payload.sh: pip/yarn downloads,
+# and the compiled CPython keyed by version+distro+arch.
+.build-cache/
+.build-cache-python/

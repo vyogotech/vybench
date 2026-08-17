@@ -147,6 +147,25 @@ jobs:
         distro: ['ubuntu:24.04']   # one distro on CI; the release build does both
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Resolve the pinned CPython version
+        id: py
+        run: |
+          # Same single source of truth as build.yml -- see the note there.
+          v="$(sed -n 's/^PYTHON_VERSION="\([^"]*\)".*/\1/p' scripts/build-bench-payload.sh | head -1)"
+          [ -n "$v" ] || { echo "::error::could not parse PYTHON_VERSION from scripts/build-bench-payload.sh"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "cpython $v"
+
+      # CI recompiled the interpreter on every run. It is bit-identical between
+      # runs unless PYTHON_VERSION moves, so there is nothing to gain from that.
+      # No restore-keys, for the ABI reason documented in build.yml.
+      - name: Cache the compiled CPython
+        uses: actions/cache@v4
+        with:
+          path: .build-cache-python
+          key: cpython-${{ steps.py.outputs.version }}-${{ matrix.distro }}-${{ runner.arch }}
+
       - name: Build bench payload
         run: |
           ./scripts/build-bench-payload.sh --distro "${{ matrix.distro }}" \
