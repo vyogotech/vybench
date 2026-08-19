@@ -2,7 +2,7 @@ DISTRO      ?= ubuntu:24.04
 FRAPPE_BRANCH ?= version-16
 FRAPPE_APPS ?= erpnext
 
-.PHONY: help payload deb rpm snap snap-remote test drift-check
+.PHONY: help payload deb rpm snap snap-remote test drift-check validate-snap
 help:
 	@echo "payload      - build the bench payload for DISTRO=$(DISTRO)"
 	@echo "deb          - build a .deb from the payload in dist/"
@@ -11,6 +11,7 @@ help:
 	@echo "snap-remote  - build amd64 AND arm64 on Launchpad (source becomes public)"
 	@echo "test         - install the built package in a clean container and verify"
 	@echo "drift-check  - compare the vendored nginx template against upstream"
+	@echo "validate-snap - run pre-flight snap validation checks"
 
 payload:
 	./scripts/build-bench-payload.sh --distro "$(DISTRO)" \
@@ -47,3 +48,6 @@ test:
 
 drift-check:
 	./scripts/check-nginx-template-drift.sh
+
+validate-snap:
+	./scripts/validate-snap.sh
