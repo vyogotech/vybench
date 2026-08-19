@@ -138,7 +138,9 @@ Continuous Integration is managed via `.github/workflows/ci.yml`:
 
 ---
 
-## License
+## Licensing & Terms
 
-* Frappe Framework: **MIT**
-* ERPNext: **GPL-3.0**
+* **vybench Packaging & Orchestration Tools:** Copyright (c) 2026 Vyogo Technologies. All Rights Reserved.  
+  *Source-Available License (No Derivatives):* Source code is publicly viewable for inspection and verification. Inspection and evaluation are permitted; modification, creation of derivative works, re-branding, or hosting modified forks without prior written authorization from Vyogo Technologies is strictly prohibited. See [LICENSE](LICENSE) for details.
+* **Frappe Framework:** MIT License
+* **ERPNext:** GPL-3.0 License (shipped as unmodified upstream source inside `apps/erpnext`)
