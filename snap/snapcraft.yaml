@@ -324,6 +324,10 @@ parts:
         # ~=8.3.1, and no version satisfies both; frappe is what actually runs.
         ./frappe-bench/env/bin/pip install 'frappe-bench==5.31.0'
         ./frappe-bench/env/bin/pip install --upgrade 'click~=8.3.1'
+
+        # Bundle ERPNext v16 directly in the snap package
+        cd $SNAPCRAFT_PART_INSTALL/opt/frappe-bench
+        /tmp/bench-bootstrap/env/bin/bench get-app erpnext --branch version-16
       "
 
       # --- Bundle Python 3.14 and fix virtualenv symlinks ---
@@ -339,6 +343,9 @@ parts:
       ln -sf ../../../../usr/bin/python3.14 $VENV_BIN/python3.14
       ln -sf python3.14 $VENV_BIN/python3
       ln -sf python3.14 $VENV_BIN/python
+
+      # Fix build-time shebangs in venv executables
+      find $VENV_BIN -type f -exec sed -i '1s|^#!/build/.*python.*|#!/usr/bin/env python3|' {} + 2>/dev/null || true
 
       # Fail the build loudly if the relative depth ever regresses.
       test -e "$VENV_BIN/python3.14" \

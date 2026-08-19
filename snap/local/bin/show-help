@@ -1,0 +1,73 @@
+#!/bin/bash
+# Show vybench help — trademark notice + quick reference.
+# Called by bench-wrapper when no arguments are passed or when "help" is the arg.
+
+cat <<'EOF'
+
+  ╦  ╦┬ ┬┌┐ ┌─┐┌┐┌┌─┐┬ ┬
+  ╚╗╔╝└┬┘├┴┐├┤ ││││  ├─┤
+   ╚╝  ┴ └─┘└─┘┘└┘└─┘┴ ┴
+
+  Frappe Bench & ERPNext, packaged as a Snap.
+
+  Frappe®, ERPNext® and the Frappe logo are trademarks of
+  Frappe Technologies Pvt. Ltd.  This package is an independent
+  distribution and is not affiliated with or endorsed by
+  Frappe Technologies.
+
+  ─────────────────────────────────────────────
+
+  QUICK START
+
+    sudo snap alias vybench.bench bench     # alias for convenience
+    cd /var/snap/vybench/common/bench
+    sudo bench new-site mysite.localhost --admin-password admin
+    echo "127.0.0.1 mysite.localhost" | sudo tee -a /etc/hosts
+    # → Open http://mysite.localhost:8000
+
+  SERVICES
+
+    snap services vybench                   # list all services
+    sudo snap restart vybench.web           # restart a service
+    sudo snap logs vybench.web -f           # follow logs
+
+  CONFIGURATION
+
+    sudo snap set vybench mode=developer    # switch to dev mode
+    sudo snap set vybench mode=production   # switch to prod mode
+    sudo snap set vybench nginx=true        # enable reverse proxy
+    sudo snap set vybench nginx-port=8080   # set nginx port
+    sudo snap set vybench bind=0.0.0.0      # expose on LAN
+    sudo snap get vybench mode              # view current mode
+
+  CLIENT TOOLS
+
+    vybench.mysql                           # MariaDB client
+    vybench.mysqldump                       # MariaDB dump
+    vybench.redis-cli                       # Redis client
+
+  DATA & PATHS
+
+    Sites & config   /var/snap/vybench/common/bench/sites/
+    Database files    /var/snap/vybench/common/mariadb/
+    Logs              /var/snap/vybench/common/bench/logs/
+    MariaDB socket    /var/snap/vybench/common/run/mysql.sock
+
+  INSTALLING FRAPPE APPS (e.g. ERPNext, HRMS, Helpdesk)
+
+    Apps require a writable bench. Switch to developer mode first:
+
+    sudo snap set vybench mode=developer   # one-time, ~1 min, ~1 GB
+    sudo vybench.bench get-app erpnext
+    sudo vybench.bench --site mysite.localhost install-app erpnext
+    sudo snap set vybench mode=production  # switch back when done
+
+    Your installed apps are preserved when switching back to production.
+    Use 'bench update' (not 'snap refresh') to upgrade after this.
+
+  MORE INFO
+
+    Docs:   https://github.com/vyogotech/vybench
+    Issues: https://github.com/vyogotech/vybench/issues
+
+EOF

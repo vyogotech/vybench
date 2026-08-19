@@ -107,7 +107,7 @@ bootstrap_common() {
   # corrupting a developer bench every time a service restarts.
   for tree in env apps; do
     if [ ! -e "$SNAP_COMMON/bench/$tree" ] || [ -L "$SNAP_COMMON/bench/$tree" ]; then
-      ln -sfn "$SNAP_STABLE/opt/frappe-bench/$tree" \
+      as_daemon ln -sfn "$SNAP_STABLE/opt/frappe-bench/$tree" \
               "$SNAP_COMMON/bench/$tree" 2>/dev/null || true
     fi
   done
@@ -120,12 +120,12 @@ bootstrap_common() {
   for seed in apps.txt apps.json; do
     if [ ! -f "$SNAP_COMMON/bench/sites/$seed" ] && \
        [ -f "$SNAP/opt/frappe-bench/sites/$seed" ]; then
-      cp "$SNAP/opt/frappe-bench/sites/$seed" "$SNAP_COMMON/bench/sites/$seed" 2>/dev/null || true
+      as_daemon cp "$SNAP/opt/frappe-bench/sites/$seed" "$SNAP_COMMON/bench/sites/$seed" 2>/dev/null || true
     fi
   done
   # Same guard as apps/env: leave a materialised (real) assets tree alone.
   if [ ! -e "$SNAP_COMMON/bench/sites/assets" ] || [ -L "$SNAP_COMMON/bench/sites/assets" ]; then
-    ln -sfn "$SNAP_STABLE/opt/frappe-bench/sites/assets" \
+    as_daemon ln -sfn "$SNAP_STABLE/opt/frappe-bench/sites/assets" \
             "$SNAP_COMMON/bench/sites/assets" 2>/dev/null || true
   fi
 
@@ -133,8 +133,8 @@ bootstrap_common() {
   # here. The same file is baked over the bench's build-time config, so both
   # copies agree by construction.
   if [ ! -f "$SNAP_COMMON/bench/sites/common_site_config.json" ]; then
-    cp "$SNAP/config/common_site_config.json" \
-       "$SNAP_COMMON/bench/sites/common_site_config.json"
+    as_daemon cp "$SNAP/config/common_site_config.json" \
+       "$SNAP_COMMON/bench/sites/common_site_config.json" 2>/dev/null || true
   fi
 
   # Shared-write surface between the snap_daemon services and the CLI user.
@@ -165,6 +165,17 @@ bootstrap_common() {
   find $shared -type d -exec chmod g+s {} + 2>/dev/null || true
 }
 
+# Run a single command as snap_daemon if invoked by root, otherwise run directly.
+# Used by hooks and helpers to modify files in $SNAP_COMMON/bench without hitting
+# AppArmor dac_override denials (since root lacks DAC override in strict snaps).
+as_daemon() {
+  if [ "$(id -u)" = "0" ]; then
+    setpriv --reuid="$DAEMON_USER" --regid="$DAEMON_USER" --clear-groups "$@"
+  else
+    "$@"
+  fi
+}
+
 # Copy apps/ and env/ out of the read-only squashfs into $SNAP_COMMON, turning
 # the install into an ordinary, fully writable bench (~1GB).
 #
@@ -180,28 +191,30 @@ materialise_bench() {
   local SRC="$SNAP/opt/frappe-bench"
 
   for tree in apps env; do
-    if [ -L "$B/$tree" ]; then
+    if [ ! -d "$B/$tree" ] || [ -L "$B/$tree" ]; then
       echo "materialising $tree/ (this takes a moment)..."
-      rm -f "$B/$tree"
-      cp -a "$SRC/$tree" "$B/$tree"
+      as_daemon rm -rf "$B/$tree"
+      as_daemon cp -a "$SRC/$tree" "$B/$tree"
     fi
   done
 
   # sites/assets holds RELATIVE symlinks (../../apps/<app>/<app>/public), so once
   # copied they resolve against the materialised apps/ automatically.
   if [ -L "$B/sites/assets" ]; then
-    rm -f "$B/sites/assets"
-    cp -a "$SRC/sites/assets" "$B/sites/assets"
+    as_daemon rm -f "$B/sites/assets"
+    as_daemon cp -a "$SRC/sites/assets" "$B/sites/assets"
   fi
 
   # The venv's interpreter link is relative (../../../../usr/bin/python3.14),
   # which counts four levels from $SNAP/opt/frappe-bench/env/bin but lands on
   # /var/snap/vybench/usr/bin from the copied location -- a dangling link that
   # breaks every bench command. Re-point it absolutely at the bundled interpreter.
+  # Also rewrite build-time shebangs (#!/build/vybench/...) to #!/usr/bin/env python3.
   if [ -d "$B/env/bin" ]; then
-    ln -sfn "$SNAP_STABLE/usr/bin/python3.14" "$B/env/bin/python3.14"
-    ln -sfn python3.14 "$B/env/bin/python3"
-    ln -sfn python3.14 "$B/env/bin/python"
+    as_daemon ln -sfn "$SNAP_STABLE/usr/bin/python3.14" "$B/env/bin/python3.14"
+    as_daemon ln -sfn python3.14 "$B/env/bin/python3"
+    as_daemon ln -sfn python3.14 "$B/env/bin/python"
+    as_daemon find "$B/env/bin" -type f -exec sed -i '1s|^#!/build/.*python.*|#!/usr/bin/env python3|' {} + 2>/dev/null || true
     [ -e "$B/env/bin/python3.14" ] || echo "WARNING: materialised venv python is dangling" >&2
   fi
 

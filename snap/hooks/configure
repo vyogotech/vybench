@@ -53,7 +53,7 @@ fi
 CFG="$SNAP_COMMON/bench/sites/common_site_config.json"
 if [ -f "$CFG" ]; then
   if [ "$MODE" = "developer" ]; then DEV=1; else DEV=0; fi
-  "$SNAP/opt/frappe-bench/env/bin/python3.14" - "$CFG" "$DEV" <<'PYEOF' || true
+  as_daemon "$SNAP/opt/frappe-bench/env/bin/python3.14" - "$CFG" "$DEV" <<'PYEOF' || true
 import json, sys
 path, dev = sys.argv[1], int(sys.argv[2])
 with open(path) as fh:

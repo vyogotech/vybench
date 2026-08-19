@@ -3,6 +3,13 @@ set -e
 
 . "$SNAP/bin/snap-common.sh"
 
+# Show vybench help (trademark + quick reference) when invoked bare or with "help".
+if [ $# -eq 0 ] || [ "$1" = "help" ] || [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+  . "$SNAP/bin/show-help"
+  # If bare invocation, stop here. If --help/-h, also show bench's own help.
+  [ $# -eq 0 ] || [ "$1" = "help" ] && exit 0
+fi
+
 require_bench_access "$@" || exit 1
 
 bootstrap_common

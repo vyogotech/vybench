@@ -62,6 +62,7 @@ jobs:
             # Snap code only.
             snap:
               - 'snap/**'
+              - 'scripts/test-snap-package.sh'
             # Touches both, so both must be rebuilt. The nginx template is here
             # because the snap and the native packages both render it, and the
             # fast tier's own harness is here because a change to it invalidates
@@ -144,7 +145,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        distro: ['ubuntu:24.04']   # one distro on CI; the release build does both
+        distro: ['ubuntu:24.04', 'debian:12']
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -196,6 +197,8 @@ jobs:
         id: build
         with:
           build-info: false
+      - name: E2E Integration Test (Snap install, dev mode, app fetch, production)
+        run: ./scripts/test-snap-package.sh "${{ steps.build.outputs.snap }}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: snap-ci
