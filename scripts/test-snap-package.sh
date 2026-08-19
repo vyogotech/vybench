@@ -6,7 +6,7 @@ set -euo pipefail
 SNAP_FILE="${1:-}"
 
 if [ -z "$SNAP_FILE" ]; then
-  SNAP_FILE=$(ls dist/*.snap vybench_*.snap *.snap 2>/dev/null | head -n 1 || true)
+  SNAP_FILE=$(find dist . -maxdepth 2 -name "*.snap" 2>/dev/null | head -n 1 || true)
 fi
 
 if [ -z "$SNAP_FILE" ] || [ ! -f "$SNAP_FILE" ]; then
@@ -18,7 +18,7 @@ echo "=== Installing snap: $SNAP_FILE ==="
 sudo snap install --dangerous "$SNAP_FILE"
 
 echo "=== Waiting for initial service startup ==="
-for i in $(seq 1 30); do
+for _ in $(seq 1 30); do
   if sudo snap services vybench 2>/dev/null | grep -q "active"; then
     echo "Services active!"
     break
@@ -29,8 +29,9 @@ done
 echo "=== Switching to developer mode ==="
 sudo snap set vybench mode=developer
 
-echo "=== Adding current user ($USER) to snap_daemon group ==="
-sudo usermod -aG snap_daemon "$USER" 2>/dev/null || true
+USER_NAME="${USER:-ubuntu}"
+echo "=== Adding current user ($USER_NAME) to snap_daemon group ==="
+sudo usermod -aG snap_daemon "$USER_NAME" 2>/dev/null || true
 
 echo "=== Creating test site (test.localhost) ==="
 sudo vybench.bench new-site test.localhost --admin-password admin
