@@ -37,7 +37,7 @@ VYBENCH_RUN="${VYBENCH_RUN:-$HOMEBREW_PREFIX/var/run/$VYBENCH_NAME}"
 BENCH_ROOT="${BENCH_ROOT:-$VYBENCH_VAR/bench}"
 BENCH_PY="$BENCH_ROOT/env/bin/python3"
 [ -x "$BENCH_PY" ] || BENCH_PY="$BENCH_ROOT/env/bin/python"
-BENCH_CLI="$BENCH_ROOT/env/bin/bench"
+export BENCH_CLI="$BENCH_ROOT/env/bin/bench"
 
 # Homebrew-managed dependencies
 MARIADB_PREFIX="$HOMEBREW_PREFIX/opt/mariadb"
@@ -127,7 +127,7 @@ materialise_bench() {
   for tree in apps env; do
     if [ ! -d "$BENCH_ROOT/$tree" ] || [ -L "$BENCH_ROOT/$tree" ]; then
       echo "vybench: materialising $tree/ (this takes a moment)..."
-      rm -rf "$BENCH_ROOT/$tree"
+      rm -rf "${BENCH_ROOT:?}/$tree"
       cp -a "$SRC/$tree" "$BENCH_ROOT/$tree"
     fi
   done

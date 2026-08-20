@@ -10,7 +10,6 @@ reexec_as_daemon "$0" "$@"
 
 DATA_DIR="$SNAP_COMMON/postgres"
 SOCKET_DIR="$SNAP_COMMON/run"
-PID_FILE="$SNAP_COMMON/postgres/postgres.pid"
 
 mkdir -p "$DATA_DIR" "$SOCKET_DIR"
 

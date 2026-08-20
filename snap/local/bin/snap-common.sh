@@ -30,7 +30,7 @@ else
   BENCH_ROOT="$SNAP/opt/frappe-bench"      # squashfs, read-only
 fi
 BENCH_PY="$BENCH_ROOT/env/bin/python3.14"
-BENCH_CLI="$BENCH_ROOT/env/bin/bench"
+export BENCH_CLI="$BENCH_ROOT/env/bin/bench"
 
 export PATH="$SNAP/usr/sbin:$SNAP/usr/bin:$SNAP/sbin:$SNAP/bin:$SNAP/usr/lib/postgresql/16/bin:$SNAP/usr/lib/postgresql/15/bin:$BENCH_ROOT/env/bin:$PATH"
 export LD_LIBRARY_PATH="$SNAP/usr/lib/x86_64-linux-gnu:$SNAP/usr/lib/aarch64-linux-gnu:$SNAP/usr/lib:$SNAP/lib/x86_64-linux-gnu:$SNAP/lib/aarch64-linux-gnu:$SNAP/lib:$LD_LIBRARY_PATH"
