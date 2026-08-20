@@ -60,10 +60,15 @@ export MYSQL_CONFIG="$MARIADB_PREFIX/bin/mariadb_config"
 # Homebrew's mariadb service first, so the supervisor often reuses that instance
 # and never creates $VYBENCH_RUN/mysql.sock. Pointing clients at a missing
 # socket makes frappe fail with OperationalError 2002.
-STOCK_MYSQL_SOCKET="$HOMEBREW_PREFIX/var/mysql/mysql.sock"
+# Homebrew MariaDB's compiled-in default is typically /tmp/mysql.sock
+# (see `mariadb_config --socket`), not var/mysql/mysql.sock.
+STOCK_MYSQL_SOCKET="$(mariadb_config --socket 2>/dev/null || true)"
+[ -n "$STOCK_MYSQL_SOCKET" ] || STOCK_MYSQL_SOCKET="/tmp/mysql.sock"
 MYSQL_SOCKET="$VYBENCH_RUN/mysql.sock"
 if [ ! -S "$MYSQL_SOCKET" ] && [ -S "$STOCK_MYSQL_SOCKET" ]; then
   MYSQL_SOCKET="$STOCK_MYSQL_SOCKET"
+elif [ ! -S "$MYSQL_SOCKET" ] && [ -S "$HOMEBREW_PREFIX/var/mysql/mysql.sock" ]; then
+  MYSQL_SOCKET="$HOMEBREW_PREFIX/var/mysql/mysql.sock"
 fi
 export MYSQL_UNIX_PORT="$MYSQL_SOCKET"
 
