@@ -198,11 +198,17 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # action-build has no snapcraft-file input; it always builds snap/snapcraft.yaml.
       - uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1
         id: build
         with:
-          snapcraft-file: snap/snapcraft.yaml
+          path: .
           build-info: false
+      - name: Assert packed snap is vybench
+        run: |
+          sudo apt-get install -y -qq squashfs-tools
+          got="$(unsquashfs -cat "${{ steps.build.outputs.snap }}" meta/snap.yaml | awk '/^name:/{print $2; exit}')"
+          [ "$got" = "vybench" ] || { echo "::error::expected vybench, got $got"; exit 1; }
       - name: E2E Integration Test (Snap install, dev mode, app fetch, production)
         run: ./scripts/test-snap-package.sh "${{ steps.build.outputs.snap }}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -223,11 +229,22 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # action-build ignores unknown `snapcraft-file` and builds snap/snapcraft.yaml
+      # (vybench). Stage the postgres recipe so vypgbench is what actually packs.
+      - name: Stage vypgbench recipe
+        run: |
+          cp snap/snapcraft.postgres.yaml snap/snapcraft.yaml
+          awk '/^name:/{print $2; exit}' snap/snapcraft.yaml | grep -qx vypgbench
       - uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1
         id: build
         with:
-          snapcraft-file: snap/snapcraft.postgres.yaml
+          path: .
           build-info: false
+      - name: Assert packed snap is vypgbench
+        run: |
+          sudo apt-get install -y -qq squashfs-tools
+          got="$(unsquashfs -cat "${{ steps.build.outputs.snap }}" meta/snap.yaml | awk '/^name:/{print $2; exit}')"
+          [ "$got" = "vypgbench" ] || { echo "::error::expected vypgbench, got $got"; exit 1; }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: snap-ci-vypgbench

@@ -312,6 +312,29 @@ jobs:
           restore-keys: |
             snap-${{ matrix.flavor }}-${{ matrix.arch }}-
 
+      # snapcore/action-build only accepts `path` (project dir), NOT a
+      # snapcraft-file input. A bogus `snapcraft-file:` is ignored and every
+      # matrix cell silently builds snap/snapcraft.yaml → name: vybench.
+      # That published vypgbench builds into the vybench store (rev 18).
+      # Stage the selected recipe as the canonical snap/snapcraft.yaml.
+      - name: Stage snapcraft recipe
+        run: |
+          set -euo pipefail
+          echo "Using ${{ matrix.file }} as snap/snapcraft.yaml"
+          cp "${{ matrix.file }}" snap/snapcraft.yaml
+          # Prove the staged name matches the matrix flavor before we burn a build.
+          staged="$(awk '/^name:/{print $2; exit}' snap/snapcraft.yaml)"
+          case "${{ matrix.flavor }}" in
+            mariadb)  want=vybench ;;
+            postgres) want=vypgbench ;;
+            *) echo "::error::unknown flavor ${{ matrix.flavor }}"; exit 1 ;;
+          esac
+          if [ "$staged" != "$want" ]; then
+            echo "::error::staged snap name '$staged' != expected '$want' for flavor ${{ matrix.flavor }}"
+            exit 1
+          fi
+          echo "staged name=$staged (ok)"
+
       # Canonical's official action. It provisions LXD correctly, which the
       # previous hand-rolled setup could not: `usermod -aG lxd $USER` followed by
       # `newgrp lxd` inside one `run:` step cannot affect later steps, so
@@ -320,11 +343,28 @@ jobs:
         id: build
         uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1
         with:
-          snapcraft-file: ${{ matrix.file }}
+          path: .
           # Omits snap/manifest.yaml. The store uses it to flag vulnerable
           # stage-packages, but it also enumerates everything the snap was built
           # from -- which this being a private, commercial artefact argues against.
           build-info: false
+
+      - name: Assert packed snap name
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq squashfs-tools
+          SNAP="${{ steps.build.outputs.snap }}"
+          case "${{ matrix.flavor }}" in
+            mariadb)  want=vybench ;;
+            postgres) want=vypgbench ;;
+          esac
+          # meta/snap.yaml inside the squashfs is what the store uses.
+          got="$(unsquashfs -cat "$SNAP" meta/snap.yaml | awk '/^name:/{print $2; exit}')"
+          echo "packed=$SNAP store-name=$got want=$want"
+          if [ "$got" != "$want" ]; then
+            echo "::error::refusing to publish: snap name is '$got', expected '$want'"
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
