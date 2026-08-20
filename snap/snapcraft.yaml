@@ -41,7 +41,7 @@ environment:
   PATH: $SNAP/usr/sbin:$SNAP/usr/bin:$SNAP/sbin:$SNAP/bin:$SNAP/opt/frappe-bench/env/bin:$PATH
   LD_LIBRARY_PATH: $SNAP/usr/lib/x86_64-linux-gnu:$SNAP/usr/lib/aarch64-linux-gnu:$SNAP/usr/lib:$SNAP/lib/x86_64-linux-gnu:$SNAP/lib/aarch64-linux-gnu:$SNAP/lib:$LD_LIBRARY_PATH
   PYTHONPATH: $SNAP/opt/frappe-bench/apps/frappe:$SNAP/opt/frappe-bench/env/lib/python3.14/site-packages
-  MYSQL_UNIX_PORT: $SNAP_COMMON/mariadb/mysql.sock
+  MYSQL_UNIX_PORT: $SNAP_COMMON/run/mysql.sock
   LC_ALL: C.UTF-8
   LANG: C.UTF-8
 

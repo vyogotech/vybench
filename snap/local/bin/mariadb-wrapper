@@ -60,12 +60,17 @@ if [ ! -d "$DATA_DIR/mysql" ]; then
   # the empty password it replaces, not a hardening boundary.
   echo "$ROOT_PW" > "$DATA_DIR/root_password"
   "$SNAP/opt/frappe-bench/env/bin/python3.14" - \
-    "$SNAP_COMMON/bench/sites/common_site_config.json" "$ROOT_PW" <<'PYEOF'
-import json, sys
-path, pw = sys.argv[1], sys.argv[2]
-with open(path) as fh:
-    cfg = json.load(fh)
+    "$SNAP_COMMON/bench/sites/common_site_config.json" "$ROOT_PW" "$SOCKET" <<'PYEOF'
+import json, os, sys
+path, pw, sock = sys.argv[1], sys.argv[2], sys.argv[3]
+os.makedirs(os.path.dirname(path), exist_ok=True)
+if os.path.exists(path):
+    with open(path) as fh:
+        cfg = json.load(fh)
+else:
+    cfg = {}
 cfg["root_password"] = pw
+cfg["db_socket"] = sock
 with open(path, "w") as fh:
     json.dump(cfg, fh, indent=1)
 PYEOF

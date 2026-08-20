@@ -46,6 +46,23 @@ if sudo snap services "$SNAP_NAME" 2>/dev/null | grep -q "^${SNAP_NAME}\.postgre
   IS_POSTGRES=true
 fi
 
+echo "=== Waiting for database to be ready ==="
+if [ "$IS_POSTGRES" = true ]; then
+  DB_SOCK="/var/snap/$SNAP_NAME/common/run/postgresql/.s.PGSQL.5432"
+  for _ in $(seq 1 60); do
+    [ -S "$DB_SOCK" ] && break
+    sleep 2
+  done
+  [ -S "$DB_SOCK" ] || { echo "::error::PostgreSQL socket not ready after 120s"; exit 1; }
+else
+  DB_SOCK="/var/snap/$SNAP_NAME/common/run/mysql.sock"
+  for _ in $(seq 1 60); do
+    [ -S "$DB_SOCK" ] && break
+    sleep 2
+  done
+  [ -S "$DB_SOCK" ] || { echo "::error::MariaDB socket not ready after 120s"; exit 1; }
+fi
+
 echo "=== Creating test site (test.localhost) ==="
 DB_ARGS=""
 if [ "$IS_POSTGRES" = true ]; then
