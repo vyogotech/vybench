@@ -338,16 +338,8 @@ jobs:
             # Point the bench at the stock socket (and store the password)
             # so frappe does not try the missing path.
             CFG="$(brew --prefix)/var/vybench-local/bench/sites/common_site_config.json"
-            python3 - "$CFG" "$STOCK_SOCK" "$CI_DB_PW" <<'PY'
-import json, sys
-path, sock, pw = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(path) as fh:
-    cfg = json.load(fh)
-cfg["db_socket"] = sock
-cfg["root_password"] = pw
-with open(path, "w") as fh:
-    json.dump(cfg, fh, indent=2)
-PY
+            python3 -c "import json,sys; p,s,w=sys.argv[1:4]; c=json.load(open(p)); c['db_socket']=s; c['root_password']=w; json.dump(c, open(p,'w'), indent=2)" \
+              "$CFG" "$STOCK_SOCK" "$CI_DB_PW"
           fi
           vybench bench new-site ci.localhost --admin-password admin \
             --db-root-username root --db-root-password "$CI_DB_PW" --force
