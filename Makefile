@@ -29,13 +29,15 @@ rpm:
 	./scripts/package-rpm.sh --output ./dist
 
 brew:
-	brew install --build-from-source ./brew/Formula/vybench.rb
+	@mkdir -p "$$(brew --repository vyogotech/tap)/Formula"
+	cp brew/Formula/vybench.rb "$$(brew --repository vyogotech/tap)/Formula/"
+	brew install --build-from-source vyogotech/tap/vybench
 
 brew-audit:
-	brew audit --new --strict ./brew/Formula/vybench.rb
+	brew audit --new --strict vyogotech/tap/vybench-local --except urls
 
 brew-test:
-	brew test vybench
+	brew test vyogotech/tap/vybench
 
 # Rebuild the local-test tarball, update its SHA256 in the formula, and install.
 # Safe to re-run: brew reinstalls if already present.
@@ -51,9 +53,11 @@ brew-local-test:
 	  echo "==> SHA256: $$SHA"; \
 	  sed -i.bak "s|sha256 \"[0-9a-f]*\"|sha256 \"$$SHA\"|" brew/Formula/vybench-local.rb && \
 	  rm -f brew/Formula/vybench-local.rb.bak
+	@mkdir -p "$$(brew --repository vyogotech/tap)/Formula"
+	cp brew/Formula/vybench-local.rb "$$(brew --repository vyogotech/tap)/Formula/"
 	@echo "==> Installing vybench-local (this takes ~10 min on first run)..."
 	brew uninstall --ignore-dependencies vybench-local 2>/dev/null || true
-	brew install --build-from-source ./brew/Formula/vybench-local.rb
+	brew install --build-from-source vyogotech/tap/vybench-local
 
 snap:
 	mkdir -p dist && snapcraft pack --output=dist/vybench_$(shell uname -m).snap
