@@ -116,6 +116,8 @@ jobs:
     outputs:
       snap: ${{ steps.plan.outputs.snap }}
       deb: ${{ steps.plan.outputs.deb }}
+      snap_count: ${{ steps.plan.outputs.snap_count }}
+      deb_count: ${{ steps.plan.outputs.deb_count }}
     steps:
       - id: plan
         run: |
@@ -186,8 +188,20 @@ jobs:
           python3 -c "import json,sys; json.loads(sys.argv[1])" "$SNAP"
           python3 -c "import json,sys; json.loads(sys.argv[1])" "$DEB"
 
-          echo "snap=$SNAP" >> "$GITHUB_OUTPUT"
-          echo "deb=$DEB"   >> "$GITHUB_OUTPUT"
+          # Heredoc form is required for JSON matrix outputs: a single-line
+          # name=value write can leave dependents with an empty string (jobs
+          # then skip with unexpanded "${{ matrix.* }}" names), especially once
+          # arm64 entries make the payload larger / richer.
+          {
+            echo "snap<<SNAPEOF"
+            printf '%s\n' "$SNAP"
+            echo "SNAPEOF"
+            echo "deb<<DEBEOF"
+            printf '%s\n' "$DEB"
+            echo "DEBEOF"
+            echo "snap_count=$(python3 -c "import json,sys; print(len(json.loads(sys.argv[1])))" "$SNAP")"
+            echo "deb_count=$(python3 -c "import json,sys; print(len(json.loads(sys.argv[1])))" "$DEB")"
+          } >> "$GITHUB_OUTPUT"
           echo "snap matrix: $SNAP"
           echo "deb  matrix: $DEB"
 
@@ -198,7 +212,7 @@ jobs:
   deb:
     name: deb · ${{ matrix.distro }} · ${{ matrix.runner }}
     needs: matrix
-    if: needs.matrix.outputs.deb != '[]'
+    if: needs.matrix.outputs.deb_count != '0' && needs.matrix.outputs.deb_count != ''
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     strategy:
@@ -288,7 +302,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     needs: matrix
-    if: needs.matrix.outputs.snap != '[]'
+    if: needs.matrix.outputs.snap_count != '0' && needs.matrix.outputs.snap_count != ''
     strategy:
       fail-fast: false
       matrix:
