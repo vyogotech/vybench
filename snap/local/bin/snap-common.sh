@@ -259,9 +259,52 @@ PYEOF
 
   # Rewrite build-time part install paths in site-packages pth/egg-link files to point to $B
   if [ -d "$B/env/lib/python3.14/site-packages" ]; then
-    as_daemon find "$B/env/lib/python3.14/site-packages" -type f \( -name "*.pth" -o -name "*.py" -o -name "*.egg-link" \) \
-      -exec sed -i "s|/tmp/vybench/parts/frappe-bench/install/opt/frappe-bench|$B|g; s|/root/parts/frappe-bench/install/opt/frappe-bench|$B|g; s|$SNAP/opt/frappe-bench|$B|g" {} + 2>/dev/null || true
+    SP="$B/env/lib/python3.14/site-packages"
+    # First pass: rewrite explicit known build-time paths
+    as_daemon find "$SP" -type f \( -name "*.pth" -o -name "*.py" -o -name "*.egg-link" \) \
+      -exec sed -i \
+        -e "s|/tmp/vybench/parts/frappe-bench/install/opt/frappe-bench|$B|g" \
+        -e "s|/root/parts/frappe-bench/install/opt/frappe-bench|$B|g" \
+        -e "s|$SNAP/opt/frappe-bench|$B|g" \
+        {} + 2>/dev/null || true
+    # Second pass: rewrite any remaining /snap/<name>/current/opt/frappe-bench references
+    # (these are paths baked by snapcraft at pack time)
+    SNAP_CURRENT_PREFIX="/snap/${SNAP_NAME}/current/opt/frappe-bench"
+    as_daemon find "$SP" -type f \( -name "*.pth" -o -name "*.egg-link" \) \
+      -exec sed -i "s|${SNAP_CURRENT_PREFIX}|$B|g" {} + 2>/dev/null || true
+    # Belt-and-suspenders: forcibly rewrite the two known editable-install .pth files
+    for APP in frappe erpnext hrms; do
+      PTH="$SP/${APP}.pth"
+      [ -f "$PTH" ] && sed -i "s|/snap/${SNAP_NAME}/current/opt/frappe-bench/apps/${APP}|$B/apps/${APP}|g" "$PTH" 2>/dev/null || true
+    done
   fi
+
+  # Patch frappe's popen() set_low_prio to silently ignore ioprio_set failures.
+  # The snap seccomp profile blocks ioprio_set(2) when running confined, which
+  # causes subprocess.Popen to raise SubprocessError: "Exception occurred in preexec_fn".
+  FRAPPE_CMDS="$B/apps/frappe/frappe/commands/__init__.py"
+  if [ -f "$FRAPPE_CMDS" ] && grep -q 'ionice(psutil.IOPRIO' "$FRAPPE_CMDS"; then
+    sed -i 's/psutil\.Process()\.ionice(psutil\.IOPRIO_CLASS_IDLE)/try:\n\t\tpsutil.Process().ionice(psutil.IOPRIO_CLASS_IDLE)\n\t\texcept Exception:\n\t\t\tpass  # ioprio_set may be blocked by seccomp/g' "$FRAPPE_CMDS" 2>/dev/null || true
+    # Simpler, safer one-liner: wrap the entire set_low_prio body in a try/except
+    python3 - <<'PYEOF'
+import re, os
+path = os.environ.get("FRAPPE_CMDS_PY", "")
+if not path or not os.path.isfile(path):
+    exit(0)
+src = open(path).read()
+# Make ionice calls non-fatal
+src = src.replace(
+    "psutil.Process().ionice(psutil.IOPRIO_CLASS_IDLE)",
+    "try:\n            psutil.Process().ionice(psutil.IOPRIO_CLASS_IDLE)\n        except Exception:\n            pass  # blocked by seccomp in snap"
+).replace(
+    "psutil.Process().ionice(psutil.IOPRIO_VERYLOW)",
+    "try:\n            psutil.Process().ionice(psutil.IOPRIO_VERYLOW)\n        except Exception:\n            pass  # blocked by seccomp in snap"
+)
+open(path, "w").write(src)
+print(f"Patched {path}")
+PYEOF
+  fi
+
 
   if [ "$(id -u)" = "0" ]; then
     chown -R "$DAEMON_USER:$DAEMON_USER" "$B" 2>/dev/null || true

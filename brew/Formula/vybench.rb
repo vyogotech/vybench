@@ -26,12 +26,12 @@ class Vybench < Formula
   # ── Runtime dependencies ──────────────────────────────────────────────────
   # Datastores and runtimes managed by Homebrew; vybench only adds the
   # Frappe application layer on top of them.
+  depends_on :macos
   depends_on "mariadb"
   depends_on "node"
   depends_on "python@3.14"
   depends_on "redis"
   depends_on "yarn"
-  depends_on :macos
 
   # wkhtmltopdf with patched Qt is required for PDF generation.
   # The upstream Homebrew formula was removed; users must install via Cask:
@@ -53,20 +53,16 @@ class Vybench < Formula
 
   def install
     # ── Paths ──────────────────────────────────────────────────────────────
-    python_bin   = Formula["python@3.14"].opt_bin/"python3.14"
-    node_bin     = Formula["node"].opt_bin/"node"
-    npm_bin      = Formula["node"].opt_bin/"npm"
-    yarn_bin     = Formula["yarn"].opt_bin/"yarn"
-    mariadb_bin  = Formula["mariadb"].opt_bin
-    redis_bin    = Formula["redis"].opt_bin
+    python_bin = formula_opt_bin("python@3.14")/"python3.14"
+    yarn_bin   = formula_opt_bin("yarn")/"yarn"
 
-    bench_src    = libexec/"frappe-bench"
+    bench_src = libexec/"frappe-bench"
 
     # ── Environment ────────────────────────────────────────────────────────
-    ENV.prepend_path "PATH", Formula["python@3.14"].opt_bin
-    ENV.prepend_path "PATH", Formula["node"].opt_bin
-    ENV.prepend_path "PATH", Formula["yarn"].opt_bin
-    ENV.prepend_path "PATH", Formula["mariadb"].opt_bin
+    ENV.prepend_path "PATH", formula_opt_bin("python@3.14")
+    ENV.prepend_path "PATH", formula_opt_bin("node")
+    ENV.prepend_path "PATH", formula_opt_bin("yarn")
+    ENV.prepend_path "PATH", formula_opt_bin("mariadb")
     # Git exec path (needed by bench init)
     git_exec = Utils.safe_popen_read("git", "--exec-path").chomp
     ENV["GIT_EXEC_PATH"] = git_exec unless git_exec.empty?
@@ -75,13 +71,13 @@ class Vybench < Formula
     # bench's `get_mariadb_pkgconfig_path()` calls `brew --prefix mariadb-connector-c`
     # which is blocked inside Homebrew's Seatbelt build sandbox. Pre-set the vars
     # so pip install mysqlclient never needs to shell out to brew.
-    mariadb_prefix = Formula["mariadb"].opt_prefix
+    mariadb_prefix = formula_opt_prefix("mariadb")
     mariadb_inc    = mariadb_prefix/"include/mysql"
     mariadb_lib    = mariadb_prefix/"lib"
-    ENV["PKG_CONFIG_PATH"]      = "#{mariadb_lib}/pkgconfig:#{ENV["PKG_CONFIG_PATH"]}"
-    ENV["MYSQLCLIENT_CFLAGS"]   = "-I#{mariadb_inc}"
-    ENV["MYSQLCLIENT_LDFLAGS"]  = "-L#{mariadb_lib} -lmariadb"
-    ENV["MYSQL_CONFIG"]         = (mariadb_prefix/"bin/mariadb_config").to_s
+    ENV["PKG_CONFIG_PATH"]     = "#{mariadb_lib}/pkgconfig:#{ENV["PKG_CONFIG_PATH"]}"
+    ENV["MYSQLCLIENT_CFLAGS"]  = "-I#{mariadb_inc}"
+    ENV["MYSQLCLIENT_LDFLAGS"] = "-L#{mariadb_lib} -lmariadb"
+    ENV["MYSQL_CONFIG"]        = (mariadb_prefix/"bin/mariadb_config").to_s
 
     # ── Bootstrap venv for bench CLI ───────────────────────────────────────
     # A temporary venv to run `bench init`; the real venv is created by bench.
@@ -149,7 +145,7 @@ class Vybench < Formula
       content = File.read(f)
       next unless content.start_with?("#!")
 
-      fixed = content.sub(/\A#!.*python.*/,  "#!/usr/bin/env python3")
+      fixed = content.sub(/\A#!.*python.*/, "#!/usr/bin/env python3")
       File.write(f, fixed) if fixed != content
     end
 
@@ -170,18 +166,18 @@ class Vybench < Formula
         next unless link.symlink?
 
         target = link.readlink.to_s
-        if target.start_with?(buildpath.to_s) || target.start_with?(libexec.to_s)
-          rel = target.sub("#{bench_src}/", "")
-          link.unlink
-          link.make_symlink("../../#{rel}")
-        end
+        next if !target.start_with?(buildpath.to_s) && !target.start_with?(libexec.to_s)
+
+        rel = target.sub("#{bench_src}/", "")
+        link.unlink
+        link.make_symlink("../../#{rel}")
       end
     end
 
     # ── Seed common_site_config.json (build-time default) ─────────────────
     sites_cfg = bench_src/"sites/common_site_config.json"
     cfg_src = buildpath/"brew/etc/vybench/common_site_config.json"
-    FileUtils.cp(cfg_src, sites_cfg) if cfg_src.exist?
+    cp cfg_src, sites_cfg if cfg_src.exist?
 
     # ── Install libexec scripts ────────────────────────────────────────────
     libexec.install buildpath/"brew/libexec/vybench-common.sh"
@@ -197,9 +193,8 @@ class Vybench < Formula
 
     # ── Install etc config ─────────────────────────────────────────────────
     (etc/"vybench").mkpath
-    (etc/"vybench/common_site_config.json").write \
-      (buildpath/"brew/etc/vybench/common_site_config.json").read \
-      unless (etc/"vybench/common_site_config.json").exist?
+    cfg_dst = etc/"vybench/common_site_config.json"
+    cfg_dst.write((buildpath/"brew/etc/vybench/common_site_config.json").read) unless cfg_dst.exist?
   end
 
   def post_install
@@ -212,9 +207,7 @@ class Vybench < Formula
 
     # ── Data directories ───────────────────────────────────────────────────
     [vybench_var, vybench_run, vybench_log, mariadb_data, redis_data,
-     bench_root/"logs", bench_root/"config/pids", bench_root/"sites"].each do |d|
-      d.mkpath
-    end
+     bench_root/"logs", bench_root/"config/pids", bench_root/"sites"].each(&:mkpath)
 
     # ── Rewrite socket path in etc config ─────────────────────────────────
     cfg_path = etc/"vybench/common_site_config.json"
@@ -226,24 +219,18 @@ class Vybench < Formula
 
     # ── Seed bench sites config from etc ──────────────────────────────────
     bench_cfg = bench_root/"sites/common_site_config.json"
-    unless bench_cfg.exist?
-      FileUtils.cp(cfg_path, bench_cfg) if cfg_path.exist?
-    end
+    cp cfg_path, bench_cfg if cfg_path.exist? && !bench_cfg.exist?
 
     # ── apps/ and env/ symlinks into libexec ──────────────────────────────
     bench_src = libexec/"frappe-bench"
-    ["apps", "env"].each do |tree|
+    %w[apps env].each do |tree|
       link = bench_root/tree
-      unless link.exist? || link.symlink?
-        link.make_symlink(bench_src/tree)
-      end
+      link.make_symlink(bench_src/tree) if !link.exist? && !link.symlink?
     end
 
     # ── sites/assets symlink ───────────────────────────────────────────────
     assets_link = bench_root/"sites/assets"
-    unless assets_link.exist? || assets_link.symlink?
-      assets_link.make_symlink(bench_src/"sites/assets")
-    end
+    assets_link.make_symlink(bench_src/"sites/assets") if !assets_link.exist? && !assets_link.symlink?
 
     # ── Seed apps.txt ──────────────────────────────────────────────────────
     ["apps.txt", "apps.json"].each do |f|
@@ -256,21 +243,21 @@ class Vybench < Formula
   # ── Service block (Frappe application tier only) ────────────────────────
   # MariaDB and Redis run as their own separate brew services.
   service do
-    run          [opt_libexec/"vybench-supervisor"]
-    keep_alive   true
-    log_path     var/"log/vybench/supervisor.log"
+    run [opt_libexec/"vybench-supervisor"]
+    keep_alive true
+    log_path var/"log/vybench/supervisor.log"
     error_log_path var/"log/vybench/supervisor.err.log"
     environment_variables(
-      HOMEBREW_PREFIX:    HOMEBREW_PREFIX,
-      VYBENCH_LIBEXEC:    opt_libexec.to_s,
-      VYBENCH_ETC:        (etc/"vybench").to_s,
-      VYBENCH_VAR:        (var/"vybench").to_s,
-      VYBENCH_LOG:        (var/"log/vybench").to_s,
-      VYBENCH_RUN:        (var/"run/vybench").to_s,
-      BENCH_ROOT:         (var/"vybench/bench").to_s,
-      PATH:               "#{Formula["python@3.14"].opt_bin}:#{Formula["node"].opt_bin}:" \
-                          "#{Formula["mariadb"].opt_bin}:#{Formula["redis"].opt_bin}:" \
-                          "#{HOMEBREW_PREFIX}/bin:/usr/bin:/bin",
+      HOMEBREW_PREFIX: HOMEBREW_PREFIX,
+      VYBENCH_LIBEXEC: opt_libexec.to_s,
+      VYBENCH_ETC:     (etc/"vybench").to_s,
+      VYBENCH_VAR:     (var/"vybench").to_s,
+      VYBENCH_LOG:     (var/"log/vybench").to_s,
+      VYBENCH_RUN:     (var/"run/vybench").to_s,
+      BENCH_ROOT:      (var/"vybench/bench").to_s,
+      PATH:            "#{formula_opt_bin("python@3.14")}:#{formula_opt_bin("node")}:" \
+                       "#{formula_opt_bin("mariadb")}:#{formula_opt_bin("redis")}:" \
+                       "#{HOMEBREW_PREFIX}/bin:/usr/bin:/bin",
     )
   end
 
