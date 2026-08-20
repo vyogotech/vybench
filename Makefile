@@ -51,8 +51,7 @@ brew-local-test:
 	cd /tmp && tar czf vybench-test.tar.gz vybench-16.0.0/
 	@SHA=$$(shasum -a 256 /tmp/vybench-test.tar.gz | awk '{print $$1}'); \
 	  echo "==> SHA256: $$SHA"; \
-	  sed -i.bak "s|sha256 \"[0-9a-f]*\"|sha256 \"$$SHA\"|" brew/Formula/vybench-local.rb && \
-	  rm -f brew/Formula/vybench-local.rb.bak
+	  python3 -c "import re; p='brew/Formula/vybench-local.rb'; c=open(p).read(); open(p,'w').write(re.sub(r'(url \"file://[^\"]+\"[\s\S]*?sha256 \")[0-9a-fA-F]+(\")', r'\g<1>' + '$$SHA' + r'\2', c, count=1))"
 	@mkdir -p "$$(brew --repository vyogotech/tap)/Formula"
 	cp brew/Formula/vybench-local.rb "$$(brew --repository vyogotech/tap)/Formula/"
 	@echo "==> Installing vybench-local (this takes ~10 min on first run)..."
