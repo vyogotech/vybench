@@ -296,11 +296,15 @@ jobs:
           [ "$(vybench get mode)" = "production" ]
 
           # 4. Create Site and verify HTTP response
-          # Pass an explicit empty root password so bench does not fall back to
-          # getpass(), which raises EOFError when there is no TTY in CI.
-          # Homebrew MariaDB installs with no root password by default.
-          vybench bench new-site ci.localhost --admin-password admin \
-            --db-root-username root --db-root-password "" --force
+          # The vybench MariaDB wrapper generates a random root password on
+          # first init and writes it to $VYBENCH_VAR/mariadb/root_password.
+          # Wait for that file so the vybench wrapper can auto-inject the
+          # credentials into bench new-site (avoids frappe calling getpass(),
+          # which raises EOFError in non-TTY CI contexts).
+          VB_PW_FILE="$(brew --prefix)/var/vybench-local/mariadb/root_password"
+          for _i in $(seq 1 30); do [ -f "$VB_PW_FILE" ] && break; sleep 2; done
+          [ -f "$VB_PW_FILE" ] || { echo "::error::MariaDB root_password file not found after 60s"; exit 1; }
+          vybench bench new-site ci.localhost --admin-password admin --force
           curl -f -I http://ci.localhost:8000/ || curl -f -I -H "Host: ci.localhost" http://127.0.0.1:8000/
 
           # 5. Verify Multi-Bench creation

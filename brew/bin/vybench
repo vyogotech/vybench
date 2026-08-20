@@ -127,6 +127,25 @@ case "$CMD" in
       # Not in a custom bench folder -> use default vybench managed bench
       cd "$BENCH_ROOT"
     fi
+    # For new-site: auto-inject the vybench-managed root credentials when the
+    # caller does not supply --db-root-username. This prevents frappe from
+    # falling back to getpass(), which raises EOFError in non-TTY / CI contexts
+    # because an empty --db-root-password "" is falsy in Python and does not
+    # suppress the getpass() call.
+    if [ "$1" = "new-site" ]; then
+      _vb_has_db_root=0
+      for _vb_arg in "$@"; do
+        [ "$_vb_arg" = "--db-root-username" ] && { _vb_has_db_root=1; break; }
+      done
+      if [ "$_vb_has_db_root" -eq 0 ]; then
+        _vb_pw_file="$VYBENCH_VAR/mariadb/root_password"
+        if [ -f "$_vb_pw_file" ]; then
+          _vb_root_pw="$(cat "$_vb_pw_file")"
+          shift  # drop "new-site" from $@
+          set -- "new-site" "--db-root-username" "root" "--db-root-password" "$_vb_root_pw" "$@"
+        fi
+      fi
+    fi
     exec "$BENCH_PY" "$BENCH_CLI" "$@"
     ;;
 
