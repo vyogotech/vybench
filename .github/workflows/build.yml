@@ -64,23 +64,24 @@ permissions:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # What changed? (push-to-main only)
-  # Skipped for tags and workflow_dispatch; the matrix job treats a skipped
-  # result as "build everything".
+  # What changed?
+  # Always runs (never skipped): a skipped dependency breaks downstream matrix
+  # expansion on workflow_dispatch/tags even when Plan itself succeeds. On push
+  # to main we path-filter; on tags / workflow_dispatch we mark everything true.
   # ---------------------------------------------------------------------------
   changes:
     name: Detect changes
-    if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      snap_mariadb: ${{ steps.filter.outputs.snap_mariadb }}
-      snap_postgres: ${{ steps.filter.outputs.snap_postgres }}
-      deb: ${{ steps.filter.outputs.deb }}
+      snap_mariadb: ${{ steps.flags.outputs.snap_mariadb }}
+      snap_postgres: ${{ steps.flags.outputs.snap_postgres }}
+      deb: ${{ steps.flags.outputs.deb }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         id: filter
+        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
         with:
           filters: |
             snap_mariadb:
@@ -98,26 +99,34 @@ jobs:
               - 'scripts/lib/**'
               - 'scripts/templates/**'
               - 'packaging/**'
+      - id: flags
+        run: |
+          FORCE="${{ inputs.force_full == true }}"
+          if [ "$FORCE" = "true" ] || \
+             [ "${{ github.event_name }}" != "push" ] || \
+             [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
+            echo "snap_mariadb=true" >> "$GITHUB_OUTPUT"
+            echo "snap_postgres=true" >> "$GITHUB_OUTPUT"
+            echo "deb=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "snap_mariadb=${{ steps.filter.outputs.snap_mariadb }}" >> "$GITHUB_OUTPUT"
+            echo "snap_postgres=${{ steps.filter.outputs.snap_postgres }}" >> "$GITHUB_OUTPUT"
+            echo "deb=${{ steps.filter.outputs.deb }}" >> "$GITHUB_OUTPUT"
+          fi
 
   # ---------------------------------------------------------------------------
   # Compute which packages to build and on which runners.
-  #
-  # For tags and workflow_dispatch the changes job is skipped, and
-  # needs.changes.result == 'skipped' signals "build everything".
-  # For push-to-main, only changed packages are queued.
-  # An empty JSON array ([]) as output tells the downstream job to skip itself.
   # ---------------------------------------------------------------------------
   matrix:
     name: Plan
     needs: [changes]
-    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       snap: ${{ steps.plan.outputs.snap }}
       deb: ${{ steps.plan.outputs.deb }}
-      snap_count: ${{ steps.plan.outputs.snap_count }}
-      deb_count: ${{ steps.plan.outputs.deb_count }}
+      has_snap: ${{ steps.plan.outputs.has_snap }}
+      has_deb: ${{ steps.plan.outputs.has_deb }}
     steps:
       - id: plan
         run: |
@@ -135,20 +144,9 @@ jobs:
           [ -n "$ARM_RUNNER" ] || ARM_RUNNER='"ubuntu-24.04-arm"'
           case "$ARM_RUNNER" in '['*|'"'*) ;; *) ARM_RUNNER="\"$ARM_RUNNER\"" ;; esac
 
-          # When the changes job was skipped (tags, workflow_dispatch) or
-          # force_full is set, treat every package as changed.
-          CHANGES_SKIPPED="${{ needs.changes.result == 'skipped' }}"
-          FORCE="${{ inputs.force_full == true }}"
-
-          if [ "$CHANGES_SKIPPED" = "true" ] || [ "$FORCE" = "true" ]; then
-            BUILD_MARIADB=true
-            BUILD_POSTGRES=true
-            BUILD_DEB=true
-          else
-            BUILD_MARIADB="${{ needs.changes.outputs.snap_mariadb }}"
-            BUILD_POSTGRES="${{ needs.changes.outputs.snap_postgres }}"
-            BUILD_DEB="${{ needs.changes.outputs.deb }}"
-          fi
+          BUILD_MARIADB="${{ needs.changes.outputs.snap_mariadb }}"
+          BUILD_POSTGRES="${{ needs.changes.outputs.snap_postgres }}"
+          BUILD_DEB="${{ needs.changes.outputs.deb }}"
 
           # Include arm64 entries on tag releases or when explicitly requested.
           FULL_ARCH=false
@@ -188,20 +186,12 @@ jobs:
           python3 -c "import json,sys; json.loads(sys.argv[1])" "$SNAP"
           python3 -c "import json,sys; json.loads(sys.argv[1])" "$DEB"
 
-          # Heredoc form is required for JSON matrix outputs: a single-line
-          # name=value write can leave dependents with an empty string (jobs
-          # then skip with unexpanded "${{ matrix.* }}" names), especially once
-          # arm64 entries make the payload larger / richer.
-          {
-            echo "snap<<SNAPEOF"
-            printf '%s\n' "$SNAP"
-            echo "SNAPEOF"
-            echo "deb<<DEBEOF"
-            printf '%s\n' "$DEB"
-            echo "DEBEOF"
-            echo "snap_count=$(python3 -c "import json,sys; print(len(json.loads(sys.argv[1])))" "$SNAP")"
-            echo "deb_count=$(python3 -c "import json,sys; print(len(json.loads(sys.argv[1])))" "$DEB")"
-          } >> "$GITHUB_OUTPUT"
+          # Simple boolean gates are reliable across skipped/always jobs;
+          # keep the JSON matrices as single-line outputs (works for amd64+arm64).
+          echo "snap=$SNAP" >> "$GITHUB_OUTPUT"
+          echo "deb=$DEB" >> "$GITHUB_OUTPUT"
+          if [ "$SNAP" = "[]" ]; then echo "has_snap=false" >> "$GITHUB_OUTPUT"; else echo "has_snap=true" >> "$GITHUB_OUTPUT"; fi
+          if [ "$DEB" = "[]" ]; then echo "has_deb=false" >> "$GITHUB_OUTPUT"; else echo "has_deb=true" >> "$GITHUB_OUTPUT"; fi
           echo "snap matrix: $SNAP"
           echo "deb  matrix: $DEB"
 
@@ -212,7 +202,7 @@ jobs:
   deb:
     name: deb · ${{ matrix.distro }} · ${{ matrix.runner }}
     needs: matrix
-    if: needs.matrix.outputs.deb_count != '0' && needs.matrix.outputs.deb_count != ''
+    if: ${{ needs.matrix.outputs.has_deb == 'true' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     strategy:
@@ -302,7 +292,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     needs: matrix
-    if: needs.matrix.outputs.snap_count != '0' && needs.matrix.outputs.snap_count != ''
+    if: ${{ needs.matrix.outputs.has_snap == 'true' }}
     strategy:
       fail-fast: false
       matrix:
