@@ -1,9 +1,9 @@
-name: vybench-postgres
+name: vypgbench
 title: Frappe Bench & ERPNext (PostgreSQL)
 version: 'develop'
 summary: Single-node Frappe Bench (develop) with PostgreSQL
 description: |
-  Vybench-postgres packages Frappe Bench (develop branch) and ERPNext (develop branch)
+  Vypgbench packages Frappe Bench (develop branch) and ERPNext (develop branch)
   with PostgreSQL as a portable Linux snap.
   Includes Python 3.14, Node.js 24, Redis 7, PostgreSQL 16, Nginx, and wkhtmltopdf.
   Installs on any Linux distro with snapd: Fedora, Ubuntu, Debian, Arch, etc.
@@ -319,9 +319,9 @@ parts:
 
       PYVENV_CFG=$SNAPCRAFT_PART_INSTALL/opt/frappe-bench/env/pyvenv.cfg
       sed -i \
-        -e "s|^home = .*|home = /snap/vybench-postgres/current/usr/bin|" \
-        -e "s|^executable = .*|executable = /snap/vybench-postgres/current/usr/bin/python3.14|" \
-        -e "s|^base-executable = .*|base-executable = /snap/vybench-postgres/current/usr/bin/python3.14|" \
+        -e "s|^home = .*|home = /snap/vypgbench/current/usr/bin|" \
+        -e "s|^executable = .*|executable = /snap/vypgbench/current/usr/bin/python3.14|" \
+        -e "s|^base-executable = .*|base-executable = /snap/vypgbench/current/usr/bin/python3.14|" \
         "$PYVENV_CFG"
       echo "--- pyvenv.cfg after rewrite ---"; cat "$PYVENV_CFG"
 
@@ -329,7 +329,7 @@ parts:
       SITE_PACKAGES=$SNAPCRAFT_PART_INSTALL/opt/frappe-bench/env/lib/python3.14/site-packages
       if [ -d "$SITE_PACKAGES" ]; then
         find "$SITE_PACKAGES" -type f \( -name "*.pth" -o -name "*.py" -o -name "*.egg-link" \) \
-          -exec sed -i "s|$SNAPCRAFT_PART_INSTALL/opt/frappe-bench|/snap/vybench-postgres/current/opt/frappe-bench|g" {} + 2>/dev/null || true
+          -exec sed -i "s|$SNAPCRAFT_PART_INSTALL/opt/frappe-bench|/snap/vypgbench/current/opt/frappe-bench|g" {} + 2>/dev/null || true
       fi
 
       # --- Replace the build-time common_site_config.json ---

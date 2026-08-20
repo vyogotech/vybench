@@ -212,8 +212,8 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  snap-postgres:
-    name: snap · postgres · amd64
+  snap-vypgbench:
+    name: snap · vypgbench · amd64
     needs: [changes, fast]
     if: >-
       needs.changes.outputs.snap == 'true' ||
@@ -230,7 +230,7 @@ jobs:
           build-info: false
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: snap-ci-postgres
+          name: snap-ci-vypgbench
           path: ${{ steps.build.outputs.snap }}
           retention-days: 7
           if-no-files-found: error
@@ -296,7 +296,11 @@ jobs:
           [ "$(vybench get mode)" = "production" ]
 
           # 4. Create Site and verify HTTP response
-          vybench bench new-site ci.localhost --admin-password admin --force
+          # Pass an explicit empty root password so bench does not fall back to
+          # getpass(), which raises EOFError when there is no TTY in CI.
+          # Homebrew MariaDB installs with no root password by default.
+          vybench bench new-site ci.localhost --admin-password admin \
+            --db-root-username root --db-root-password "" --force
           curl -f -I http://ci.localhost:8000/ || curl -f -I -H "Host: ci.localhost" http://127.0.0.1:8000/
 
           # 5. Verify Multi-Bench creation
@@ -307,7 +311,7 @@ jobs:
   # name each job, and a SKIPPED job is not a PASSED one.
   ci:
     name: CI
-    needs: [fast, deb, snap, snap-postgres, brew]
+    needs: [fast, deb, snap, snap-vypgbench, brew]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -316,11 +320,11 @@ jobs:
           echo "fast:          ${{ needs.fast.result }}"
           echo "deb:           ${{ needs.deb.result }}"
           echo "snap:          ${{ needs.snap.result }}"
-          echo "snap-postgres: ${{ needs.snap-postgres.result }}"
+          echo "snap-vypgbench: ${{ needs.snap-vypgbench.result }}"
           echo "brew:          ${{ needs.brew.result }}"
           # 'skipped' is a pass here: it means nothing relevant to that format
           # changed. 'failure' and 'cancelled' are not.
-          for r in "${{ needs.fast.result }}" "${{ needs.deb.result }}" "${{ needs.snap.result }}" "${{ needs.snap-postgres.result }}" "${{ needs.brew.result }}"; do
+          for r in "${{ needs.fast.result }}" "${{ needs.deb.result }}" "${{ needs.snap.result }}" "${{ needs.snap-vypgbench.result }}" "${{ needs.brew.result }}"; do
             case "$r" in
               success|skipped) ;;
               *) echo "::error::a required job did not succeed"; exit 1 ;;

@@ -20,19 +20,11 @@ PG_ISREADY_BIN=$(find /usr/lib/postgresql -name pg_isready 2>/dev/null | head -1
 PG_SHARE_DIR=$(find /usr/share/postgresql "$SNAP/usr/share/postgresql" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
 export PGSHAREDIR="$PG_SHARE_DIR"
 
-echo "DEBUG: INITDB_BIN=$INITDB_BIN"
-echo "DEBUG: POSTGRES_BIN=$POSTGRES_BIN"
-
 if [ ! -f "$DATA_DIR/PG_VERSION" ]; then
-  echo "DEBUG: Checking /usr/lib/postgresql/16/lib layout:"
-  ls -l /usr/lib/postgresql/16/lib || true
-  echo "DEBUG: Checking \$SNAP/usr/lib/postgresql/16/lib:"
-  ls -l "$SNAP/usr/lib/postgresql/16/lib" || true
-
   echo "Initializing PostgreSQL system database in $DATA_DIR..."
   "$INITDB_BIN" -D "$DATA_DIR" -L "$PG_SHARE_DIR" --username=postgres --auth=trust
 
-  ROOT_PW="postgres"
+  ROOT_PW=$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20)
 
   "$POSTGRES_BIN" -D "$DATA_DIR" -k "$SOCKET_DIR" -h "" -p 5432 &
   INIT_PID=$!
@@ -54,7 +46,30 @@ if [ ! -f "$DATA_DIR/PG_VERSION" ]; then
   wait "$INIT_PID" 2>/dev/null || true
 
   echo "$ROOT_PW" > "$DATA_DIR/root_password"
-  "$BENCH_PY" - "$SNAP_COMMON/bench/sites/common_site_config.json" "$ROOT_PW" <<'PYEOF'
+
+  # Ensure the bench sites directory and config exist before writing root_password.
+  # bootstrap_common (called by web/worker wrappers) normally seeds this file, but
+  # there is no guaranteed service start order -- postgres may initialise before any
+  # other service runs bootstrap_common, so we seed it here if absent.
+  CFG="$SNAP_COMMON/bench/sites/common_site_config.json"
+  if [ ! -f "$CFG" ]; then
+    mkdir -p "$(dirname "$CFG")"
+    cp "$SNAP/config/common_site_config.json" "$CFG" 2>/dev/null || true
+    "$BENCH_PY" - "$CFG" <<'PYEOF' || true
+import json, sys
+path = sys.argv[1]
+with open(path) as fh:
+    cfg = json.load(fh)
+cfg["db_type"] = "postgres"
+cfg["db_port"] = 5432
+cfg["db_host"] = "127.0.0.1"
+cfg.pop("db_socket", None)
+with open(path, "w") as fh:
+    json.dump(cfg, fh, indent=1)
+PYEOF
+  fi
+
+  "$BENCH_PY" - "$CFG" "$ROOT_PW" <<'PYEOF'
 import json, sys
 path, pw = sys.argv[1], sys.argv[2]
 with open(path) as fh:

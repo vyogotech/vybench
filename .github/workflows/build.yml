@@ -1,17 +1,37 @@
 name: Build Packages
 
-# Replaces the previous package-release.yml + snap-build.yaml pair, which both
-# built snaps and disagreed about how.
+# Three triggers:
 #
-# Triggers: tags and manual dispatch only, never push.
-# One full run is ~2 hours of runner time -- each .deb job compiles CPython 3.14
-# from source, runs `bench init` and builds the frontend assets, and the snap does
-# the same again inside LXD. On a PRIVATE repository those minutes are metered
-# (2,000/month on Free, 3,000 on Team), so a push trigger drains the quota in days.
+#   1. Push to main (path-filtered) — selective build: only the snap or deb
+#      package whose source files actually changed is rebuilt. A snap-only edit
+#      never queues a 2-hour deb build, and vice versa.
+#
+#   2. Tags (v*) — full release build: all snaps (vybench + vypgbench), all deb
+#      distros, arm64 included. Publishes snaps to their store entries when
+#      `publish_snap` is true.
+#      NOTE: the `paths` filter below also applies to tag pushes. Release tags
+#      target commits that change packaging code, so this is always satisfied.
+#      Use `workflow_dispatch` to force a full build if not.
+#
+#   3. workflow_dispatch — manual trigger; `force_full=true` rebuilds everything
+#      regardless of what changed.
+#
 # Iterate locally with scripts/build-bench-payload.sh -- it is the same code path.
 on:
   push:
+    branches: [main]
     tags: ['v*']
+    paths:
+      - 'snap/snapcraft.yaml'          # vybench (mariadb)
+      - 'snap/snapcraft.postgres.yaml' # vypgbench (postgres)
+      - 'snap/local/**'               # shared snap wrappers — triggers both snaps
+      - 'snap/hooks/**'               # shared snap hooks — triggers both snaps
+      - 'scripts/build-bench-payload.sh'
+      - 'scripts/package-deb.sh'
+      - 'scripts/package-rpm.sh'
+      - 'scripts/lib/**'
+      - 'scripts/templates/**'
+      - 'packaging/**'
   workflow_dispatch:
     inputs:
       version:
@@ -28,6 +48,11 @@ on:
         type: boolean
         required: false
         default: false
+      force_full:
+        description: 'Build all packages regardless of what changed'
+        type: boolean
+        required: false
+        default: true
 
 # A second tag push should not leave two 2-hour runs racing each other.
 concurrency:
@@ -39,16 +64,53 @@ permissions:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Build the matrices here rather than inline.
+  # What changed? (push-to-main only)
+  # Skipped for tags and workflow_dispatch; the matrix job treats a skipped
+  # result as "build everything".
+  # ---------------------------------------------------------------------------
+  changes:
+    name: Detect changes
+    if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      snap_mariadb: ${{ steps.filter.outputs.snap_mariadb }}
+      snap_postgres: ${{ steps.filter.outputs.snap_postgres }}
+      deb: ${{ steps.filter.outputs.deb }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
+        id: filter
+        with:
+          filters: |
+            snap_mariadb:
+              - 'snap/snapcraft.yaml'
+              - 'snap/local/**'
+              - 'snap/hooks/**'
+            snap_postgres:
+              - 'snap/snapcraft.postgres.yaml'
+              - 'snap/local/**'
+              - 'snap/hooks/**'
+            deb:
+              - 'scripts/build-bench-payload.sh'
+              - 'scripts/package-deb.sh'
+              - 'scripts/package-rpm.sh'
+              - 'scripts/lib/**'
+              - 'scripts/templates/**'
+              - 'packaging/**'
+
+  # ---------------------------------------------------------------------------
+  # Compute which packages to build and on which runners.
   #
-  # An inline expression cannot pick up the ARM64_RUNNER repository variable
-  # without unreadable format()/brace-escaping, and getting a matrix expression
-  # subtly wrong produces ZERO jobs with no error at all -- which already
-  # happened once and silently removed the entire snap build from a run.
-  # Computing it in a step means it can be printed, and read.
+  # For tags and workflow_dispatch the changes job is skipped, and
+  # needs.changes.result == 'skipped' signals "build everything".
+  # For push-to-main, only changed packages are queued.
+  # An empty JSON array ([]) as output tells the downstream job to skip itself.
   # ---------------------------------------------------------------------------
   matrix:
     name: Plan
+    needs: [changes]
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -71,31 +133,72 @@ jobs:
           [ -n "$ARM_RUNNER" ] || ARM_RUNNER='"ubuntu-24.04-arm"'
           case "$ARM_RUNNER" in '['*|'"'*) ;; *) ARM_RUNNER="\"$ARM_RUNNER\"" ;; esac
 
+          # When the changes job was skipped (tags, workflow_dispatch) or
+          # force_full is set, treat every package as changed.
+          CHANGES_SKIPPED="${{ needs.changes.result == 'skipped' }}"
+          FORCE="${{ inputs.force_full == true }}"
+
+          if [ "$CHANGES_SKIPPED" = "true" ] || [ "$FORCE" = "true" ]; then
+            BUILD_MARIADB=true
+            BUILD_POSTGRES=true
+            BUILD_DEB=true
+          else
+            BUILD_MARIADB="${{ needs.changes.outputs.snap_mariadb }}"
+            BUILD_POSTGRES="${{ needs.changes.outputs.snap_postgres }}"
+            BUILD_DEB="${{ needs.changes.outputs.deb }}"
+          fi
+
+          # Include arm64 entries on tag releases or when explicitly requested.
+          FULL_ARCH=false
           if [ "${{ inputs.include_arm64 }}" = "true" ] || \
              [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
-            SNAP="[{\"arch\":\"amd64\",\"runner\":\"ubuntu-24.04\",\"file\":\"snap/snapcraft.yaml\",\"flavor\":\"mariadb\"},{\"arch\":\"arm64\",\"runner\":$ARM_RUNNER,\"file\":\"snap/snapcraft.yaml\",\"flavor\":\"mariadb\"},{\"arch\":\"amd64\",\"runner\":\"ubuntu-24.04\",\"file\":\"snap/snapcraft.postgres.yaml\",\"flavor\":\"postgres\"},{\"arch\":\"arm64\",\"runner\":$ARM_RUNNER,\"file\":\"snap/snapcraft.postgres.yaml\",\"flavor\":\"postgres\"}]"
-            DEB="[{\"distro\":\"ubuntu:24.04\",\"runner\":\"ubuntu-24.04\"},{\"distro\":\"debian:12\",\"runner\":\"ubuntu-24.04\"},{\"distro\":\"ubuntu:24.04\",\"runner\":$ARM_RUNNER}]"
-          else
-            SNAP='[{"arch":"amd64","runner":"ubuntu-24.04","file":"snap/snapcraft.yaml","flavor":"mariadb"},{"arch":"amd64","runner":"ubuntu-24.04","file":"snap/snapcraft.postgres.yaml","flavor":"postgres"}]'
-            DEB='[{"distro":"ubuntu:24.04","runner":"ubuntu-24.04"},{"distro":"debian:12","runner":"ubuntu-24.04"}]'
+            FULL_ARCH=true
           fi
+
+          # Build snap matrix -- one entry per (snap, arch) combination.
+          SNAP_ENTRIES=""
+          if [ "$BUILD_MARIADB" = "true" ]; then
+            SNAP_ENTRIES="${SNAP_ENTRIES:+$SNAP_ENTRIES,}{\"arch\":\"amd64\",\"runner\":\"ubuntu-24.04\",\"file\":\"snap/snapcraft.yaml\",\"flavor\":\"mariadb\"}"
+            if [ "$FULL_ARCH" = "true" ]; then
+              SNAP_ENTRIES="${SNAP_ENTRIES},{\"arch\":\"arm64\",\"runner\":$ARM_RUNNER,\"file\":\"snap/snapcraft.yaml\",\"flavor\":\"mariadb\"}"
+            fi
+          fi
+          if [ "$BUILD_POSTGRES" = "true" ]; then
+            SNAP_ENTRIES="${SNAP_ENTRIES:+$SNAP_ENTRIES,}{\"arch\":\"amd64\",\"runner\":\"ubuntu-24.04\",\"file\":\"snap/snapcraft.postgres.yaml\",\"flavor\":\"postgres\"}"
+            if [ "$FULL_ARCH" = "true" ]; then
+              SNAP_ENTRIES="${SNAP_ENTRIES},{\"arch\":\"arm64\",\"runner\":$ARM_RUNNER,\"file\":\"snap/snapcraft.postgres.yaml\",\"flavor\":\"postgres\"}"
+            fi
+          fi
+          SNAP="[${SNAP_ENTRIES}]"
+
+          # Build deb matrix.
+          DEB_ENTRIES=""
+          if [ "$BUILD_DEB" = "true" ]; then
+            DEB_ENTRIES="{\"distro\":\"ubuntu:24.04\",\"runner\":\"ubuntu-24.04\"},{\"distro\":\"debian:12\",\"runner\":\"ubuntu-24.04\"}"
+            if [ "$FULL_ARCH" = "true" ]; then
+              DEB_ENTRIES="${DEB_ENTRIES},{\"distro\":\"ubuntu:24.04\",\"runner\":$ARM_RUNNER}"
+            fi
+          fi
+          DEB="[${DEB_ENTRIES}]"
 
           # Fail loudly on malformed JSON: fromJSON on a bad string yields an
           # empty matrix and therefore no jobs, with nothing in the log.
-          python3 -c "import json,sys; assert json.loads(sys.argv[1]), 'empty'" "$SNAP"
-          python3 -c "import json,sys; assert json.loads(sys.argv[1]), 'empty'" "$DEB"
+          python3 -c "import json,sys; json.loads(sys.argv[1])" "$SNAP"
+          python3 -c "import json,sys; json.loads(sys.argv[1])" "$DEB"
 
           echo "snap=$SNAP" >> "$GITHUB_OUTPUT"
-          echo "deb=$DEB"  >> "$GITHUB_OUTPUT"
+          echo "deb=$DEB"   >> "$GITHUB_OUTPUT"
           echo "snap matrix: $SNAP"
           echo "deb  matrix: $DEB"
 
   # ---------------------------------------------------------------------------
-  # .deb -- one job per distribution, all running concurrently with the snap job
+  # .deb -- one job per distribution, runs concurrently with snap jobs.
+  # Skipped when nothing deb-relevant changed (matrix outputs empty array).
   # ---------------------------------------------------------------------------
   deb:
     name: deb · ${{ matrix.distro }} · ${{ matrix.runner }}
     needs: matrix
+    if: needs.matrix.outputs.deb != '[]'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     strategy:
@@ -176,13 +279,16 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
-  # snap -- concurrent with the .deb jobs
+  # snap -- concurrent with the .deb jobs.
+  # Skipped when nothing snap-relevant changed (matrix outputs empty array).
+  # The flavor field drives the artifact name: mariadb → vybench, postgres → vypgbench.
   # ---------------------------------------------------------------------------
   snap:
     name: snap · ${{ matrix.flavor }} · ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     needs: matrix
+    if: needs.matrix.outputs.snap != '[]'
     strategy:
       fail-fast: false
       matrix:
@@ -219,6 +325,11 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+      # Publish to the Snap Store. Each snap has its own store entry:
+      #   mariadb flavor → vybench (stable v16)
+      #   postgres flavor → vypgbench (develop / PostgreSQL)
+      # Channel is 'edge' for manual publish and tag releases; promote to
+      # 'stable' through the store dashboard after validation.
       - name: Publish snap to Snap Store
         if: inputs.publish_snap || startsWith(github.ref, 'refs/tags/v')
         uses: snapcore/action-publish@214b86e5ca036ead1668c79afb81e550e6c54d40 # v1
@@ -229,12 +340,14 @@ jobs:
           release: edge
 
   # ---------------------------------------------------------------------------
-  # release -- only once every build above has succeeded
+  # release -- only once every build above has succeeded on a tag push.
+  # Uses `if: always()` so a skipped deb or snap (empty matrix on a
+  # snap-only tag) does not block the release job.
   # ---------------------------------------------------------------------------
   release:
     name: Release
     needs: [matrix, deb, snap]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: always() && startsWith(github.ref, 'refs/tags/v') && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -262,7 +375,14 @@ jobs:
           body: |
             Frappe v16 / ERPNext as installable packages.
 
-            ### Which file
+            ### Snaps
+
+            | Snap | Database | Install |
+            | :--- | :--- | :--- |
+            | `vybench` | MariaDB (v16 stable) | `sudo snap install vybench` |
+            | `vypgbench` | PostgreSQL (develop) | `sudo snap install vypgbench` |
+
+            ### Native packages (.deb)
 
             The `.deb` builds are **distribution-specific** — each bundles a
             CPython 3.14 compiled against that release's own OpenSSL and sqlite,
@@ -272,24 +392,16 @@ jobs:
             | :--- | :--- |
             | `vybench_*~ubuntu2404_*.deb` | Ubuntu 24.04 |
             | `vybench_*~debian12_*.deb` | Debian 12 |
-            | `vybench_*.snap` | any distribution with `snapd` |
-
-            ### Install
 
             ```bash
             sudo apt install ./vybench_*~ubuntu2404_amd64.deb
             sudo vybench-setup --site dev.localhost --admin-password admin
             ```
 
-            Installing starts nothing; `vybench-setup` creates the database
-            account, the site (with ERPNext installed), the nginx vhost, and
-            starts the services.
-
             ### Verify your download
 
-            These packages are **not GPG-signed**, so `apt update` / `apt upgrade`
-            cannot track them — install the file directly and check it against
-            the published digest:
+            These packages are **not GPG-signed** — check them against the
+            published digest:
 
             ```bash
             sha256sum -c SHA256SUMS --ignore-missing

@@ -162,3 +162,50 @@ Data lives in `/var/snap/vybench/common`:
 `snap remove vybench` keeps this directory as a snapshot; use
 `snap remove --purge` to delete it. Back up sites with `bench backup` before
 removing anything.
+
+---
+
+## 8. PostgreSQL variant — `vypgbench`
+
+`vypgbench` is the PostgreSQL build of the same stack, tracking Frappe and
+ERPNext `develop` rather than the stable v16 branch.
+
+```bash
+sudo snap install vypgbench
+```
+
+```bash
+# Optional alias
+sudo snap alias vypgbench.bench bench
+
+# Add yourself to the snap_daemon group
+sudo usermod -aG snap_daemon $USER && newgrp snap_daemon
+```
+
+Create a site — the PostgreSQL root password is generated at first start and
+recorded automatically in `common_site_config.json`:
+
+```bash
+cd /var/snap/vypgbench/common/bench
+vypgbench.bench new-site mysite.localhost --admin-password admin
+```
+
+Service and config commands mirror `vybench`, with the prefix swapped:
+
+```bash
+snap services vypgbench
+sudo snap set vypgbench mode=developer
+sudo snap set vypgbench nginx=true
+sudo snap logs vypgbench.web -f
+```
+
+Client tools:
+
+```bash
+vypgbench.psql -U postgres -h 127.0.0.1
+vypgbench.pg-dump -U postgres mydb > dump.sql
+vypgbench.pg-restore -U postgres -d mydb dump.sql
+```
+
+Data lives in `/var/snap/vypgbench/common/` with the same layout as `vybench`
+(`bench/sites/`, `postgres/`, `run/`, `bench/logs/`).

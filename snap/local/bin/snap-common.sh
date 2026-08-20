@@ -40,7 +40,7 @@ export PYTHONPATH="$BENCH_ROOT/apps/frappe:$BENCH_ROOT/env/lib/python3.14/site-p
 # directory is world-traversable so any local user can connect without being
 # added to a group. Connecting is not authorisation -- MariaDB still demands the
 # generated root password -- so an open socket costs nothing.
-if [ "$SNAP_NAME" != "vybench-postgres" ]; then
+if [ ! -f "$SNAP/bin/postgres-wrapper" ] && [ ! -d "$SNAP/usr/lib/postgresql" ]; then
   export MYSQL_UNIX_PORT="$SNAP_COMMON/run/mysql.sock"
 fi
 export PGHOST="$SNAP_COMMON/run"
@@ -144,7 +144,7 @@ bootstrap_common() {
        "$SNAP_COMMON/bench/sites/common_site_config.json" 2>/dev/null || true
     
     # Ensure db_type is postgres in common_site_config.json when running under postgres snap
-    if { [ -f "$SNAP/bin/postgres-wrapper" ] || [[ "$SNAP_NAME" == *"postgres"* ]]; }; then
+    if [ -f "$SNAP/bin/postgres-wrapper" ]; then
       as_daemon "$SNAP/opt/frappe-bench/env/bin/python3.14" - "$SNAP_COMMON/bench/sites/common_site_config.json" <<'PYEOF' || true
 import json, sys
 path = sys.argv[1]
@@ -229,7 +229,7 @@ materialise_bench() {
   fi
 
   # Ensure db_type is postgres in common_site_config.json when running under postgres snap
-  if [ -f "$B/sites/common_site_config.json" ] && { [ -f "$SNAP/bin/postgres-wrapper" ] || [[ "$SNAP_NAME" == *"postgres"* ]]; }; then
+  if [ -f "$B/sites/common_site_config.json" ] && [ -f "$SNAP/bin/postgres-wrapper" ]; then
     as_daemon "$SNAP/opt/frappe-bench/env/bin/python3.14" - "$B/sites/common_site_config.json" <<'PYEOF' || true
 import json, sys
 path = sys.argv[1]
@@ -279,30 +279,29 @@ PYEOF
     done
   fi
 
-  # Patch frappe's popen() set_low_prio to silently ignore ioprio_set failures.
-  # The snap seccomp profile blocks ioprio_set(2) when running confined, which
-  # causes subprocess.Popen to raise SubprocessError: "Exception occurred in preexec_fn".
+  # Patch frappe's popen() set_low_prio to safely catch ionice/nice exceptions.
+  # Under snap confinement (and unprivileged snap_daemon execution), ioprio_set(2)
+  # is blocked by AppArmor/seccomp, raising SubprocessError: Exception occurred in preexec_fn.
   FRAPPE_CMDS="$B/apps/frappe/frappe/commands/__init__.py"
-  if [ -f "$FRAPPE_CMDS" ] && grep -q 'ionice(psutil.IOPRIO' "$FRAPPE_CMDS"; then
-    sed -i 's/psutil\.Process()\.ionice(psutil\.IOPRIO_CLASS_IDLE)/try:\n\t\tpsutil.Process().ionice(psutil.IOPRIO_CLASS_IDLE)\n\t\texcept Exception:\n\t\t\tpass  # ioprio_set may be blocked by seccomp/g' "$FRAPPE_CMDS" 2>/dev/null || true
-    # Simpler, safer one-liner: wrap the entire set_low_prio body in a try/except
-    python3 - <<'PYEOF'
-import re, os
-path = os.environ.get("FRAPPE_CMDS_PY", "")
-if not path or not os.path.isfile(path):
-    exit(0)
-src = open(path).read()
-# Make ionice calls non-fatal
-src = src.replace(
-    "psutil.Process().ionice(psutil.IOPRIO_CLASS_IDLE)",
-    "try:\n            psutil.Process().ionice(psutil.IOPRIO_CLASS_IDLE)\n        except Exception:\n            pass  # blocked by seccomp in snap"
-).replace(
-    "psutil.Process().ionice(psutil.IOPRIO_VERYLOW)",
-    "try:\n            psutil.Process().ionice(psutil.IOPRIO_VERYLOW)\n        except Exception:\n            pass  # blocked by seccomp in snap"
-)
-open(path, "w").write(src)
-print(f"Patched {path}")
-PYEOF
+  if [ -f "$FRAPPE_CMDS" ]; then
+    python3 -c "
+import re
+path = '$FRAPPE_CMDS'
+try:
+    with open(path, 'r') as f:
+        content = f.read()
+    if 'def set_low_prio():' in content and 'try:' not in content.split('def set_low_prio():')[1].split('proc = subprocess.Popen')[0]:
+        pattern = r'(def set_low_prio\(\):)(\n\s+import psutil[\s\S]*?)(?=\n\s+proc\s*=)'
+        def wrap_try(m):
+            lines = m.group(2).split('\n')
+            indented = '\n'.join('\t' + line if line.strip() else line for line in lines)
+            return m.group(1) + '\n\t\ttry:' + indented + '\n\t\texcept Exception:\n\t\t\tpass'
+        new_content = re.sub(pattern, wrap_try, content)
+        with open(path, 'w') as f:
+            f.write(new_content)
+except Exception:
+    pass
+" 2>/dev/null || true
   fi
 
 

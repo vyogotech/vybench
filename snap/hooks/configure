@@ -10,7 +10,7 @@ set -e
 
 SNAP_NAME="${SNAP_INSTANCE_NAME:-vybench}"
 
-if [ -f "$SNAP/bin/postgres-wrapper" ] || [[ "$SNAP_NAME" == *"postgres"* ]]; then
+if [ -f "$SNAP/bin/postgres-wrapper" ]; then
   DB_SVC="postgres"
 else
   DB_SVC="mariadb"
@@ -88,5 +88,5 @@ fi
 # Recycle the web daemon so a mode/bind change takes effect. Guarded: this hook
 # also runs during the initial install, before the service exists.
 if [ "$MODE" = "production" ]; then
-  snapctl restart vybench.web 2>/dev/null || true
+  snapctl restart "$SNAP_NAME.web" 2>/dev/null || true
 fi

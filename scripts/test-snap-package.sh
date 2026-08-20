@@ -14,10 +14,7 @@ if [ -z "$SNAP_FILE" ] || [ ! -f "$SNAP_FILE" ]; then
   exit 1
 fi
 
-SNAP_NAME="vybench"
-if [[ "$(basename "$SNAP_FILE")" == *"postgres"* ]]; then
-  SNAP_NAME="vybench-postgres"
-fi
+SNAP_NAME=$(basename "$SNAP_FILE" | cut -d_ -f1)
 
 echo "=== Cleaning up previous installation of $SNAP_NAME ==="
 sudo systemctl stop postgresql 2>/dev/null || true
@@ -44,9 +41,14 @@ USER_NAME="${SUDO_USER:-${USER:-varun}}"
 echo "=== Adding current user ($USER_NAME) to snap_daemon group ==="
 sudo usermod -aG snap_daemon "$USER_NAME" 2>/dev/null || true
 
+IS_POSTGRES=false
+if sudo snap services "$SNAP_NAME" 2>/dev/null | grep -q "^${SNAP_NAME}\.postgres"; then
+  IS_POSTGRES=true
+fi
+
 echo "=== Creating test site (test.localhost) ==="
 DB_ARGS=""
-if [ "$SNAP_NAME" = "vybench-postgres" ]; then
+if [ "$IS_POSTGRES" = true ]; then
   ROOT_PW=$(sudo cat "/var/snap/$SNAP_NAME/common/postgres/root_password" 2>/dev/null || echo "postgres")
   DB_ARGS="--db-type postgres --db-port 5432 --db-host 127.0.0.1 --db-root-username postgres --db-root-password ${ROOT_PW:-postgres}"
 fi
@@ -54,7 +56,7 @@ sudo "$SNAP_NAME.bench" new-site test.localhost --admin-password admin $DB_ARGS
 
 echo "=== Testing get-app (hrms) ==="
 BRANCH="version-16"
-if [ "$SNAP_NAME" = "vybench-postgres" ]; then
+if [ "$IS_POSTGRES" = true ]; then
   BRANCH="develop"
 fi
 sudo "$SNAP_NAME.bench" get-app hrms --branch "$BRANCH"

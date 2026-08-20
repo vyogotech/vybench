@@ -8,16 +8,20 @@
 ## Step 0 — Install & Set Up Access (Do This Once)
 
 ```bash
-# Install
+# MariaDB v16 (stable)
 sudo snap install --edge vybench          # edge (latest)
 sudo snap install vybench                 # stable
+
+# PostgreSQL / develop  (vypgbench)
+sudo snap install vypgbench
 
 # Add yourself to the snap_daemon group so bench works without sudo
 sudo usermod -aG snap_daemon $USER
 newgrp snap_daemon                        # apply immediately (or log out/in)
 
-# Alias for convenience
-sudo snap alias vybench.bench bench
+# Alias for convenience (use the snap you installed)
+sudo snap alias vybench.bench bench       # MariaDB build
+# sudo snap alias vypgbench.bench bench  # PostgreSQL build
 ```
 
 After this, all `bench` commands below run **without `sudo`**.
@@ -213,6 +217,46 @@ snap remove --purge vybench              # removes snap + all data (irreversible
 
 - **Docs:** https://github.com/vyogotech/vybench
 - **Issues:** https://github.com/vyogotech/vybench/issues
-- **Snap Store:** https://snapcraft.io/vybench
+- **Snap Store (MariaDB):** https://snapcraft.io/vybench
+- **Snap Store (PostgreSQL):** https://snapcraft.io/vypgbench
 - **Frappe Docs:** https://frappeframework.com/docs
 - **Bench Docs:** https://frappeframework.com/docs/user/en/bench
+
+---
+
+## `vypgbench` — PostgreSQL / develop variant
+
+All commands are identical to `vybench`; swap the prefix.
+
+```bash
+# Services
+snap services vypgbench
+sudo snap start  vypgbench.web
+sudo snap logs   vypgbench.web -f
+sudo snap logs   vypgbench.postgres -n 50
+
+# Mode
+sudo snap set vypgbench mode=developer
+sudo snap get vypgbench mode
+
+# Sites
+cd /var/snap/vypgbench/common/bench
+vypgbench.bench new-site mysite.localhost --admin-password admin
+
+# PostgreSQL client
+vypgbench.psql -U postgres -h 127.0.0.1
+vypgbench.pg-dump -U postgres mydb > dump.sql
+```
+
+| Service | Role |
+| :--- | :--- |
+| `vypgbench.postgres` | Database |
+| `vypgbench.redis` | Cache + queue |
+| `vypgbench.web` | Gunicorn (HTTP) |
+| `vypgbench.worker` | Background jobs (default queue) |
+| `vypgbench.worker-short` | Background jobs (short queue) |
+| `vypgbench.worker-long` | Background jobs (long queue) |
+| `vypgbench.scheduler` | Cron / scheduled tasks |
+| `vypgbench.socketio` | Realtime / websockets |
+
+Data paths: `/var/snap/vypgbench/common/{bench/sites, postgres, run, bench/logs}`
