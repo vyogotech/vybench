@@ -1,0 +1,142 @@
+#!/bin/bash
+# vybench-supervisor — multi-process supervisor for vybench on macOS.
+#
+# Started by launchd via `brew services start vybench`.
+# Manages the Frappe application tier (web/worker/scheduler/socketio).
+#
+# The datastores (MariaDB and Redis) are managed by their own separate
+# Homebrew service entries (`brew services start mariadb` and
+# `brew services start redis`). This script only manages the Frappe
+# application layer on top of them.
+#
+# On SIGTERM/SIGINT: gracefully shuts down all child processes.
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "$SCRIPT_DIR/vybench-common.sh"
+
+bootstrap_common
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+mkdir -p "$VYBENCH_LOG"
+log() { echo "[vybench-supervisor $(date '+%H:%M:%S')] $*"; }
+log_err() { echo "[vybench-supervisor $(date '+%H:%M:%S')] ERROR: $*" >&2; }
+
+# ---------------------------------------------------------------------------
+# Child PID tracking & helper
+# ---------------------------------------------------------------------------
+CHILD_PIDS=""
+
+start_process() {
+  local label="$1"
+  shift
+  log "Starting $label: $*"
+  "$@" >> "$VYBENCH_LOG/$label.log" 2>&1 &
+  local pid=$!
+  CHILD_PIDS="$CHILD_PIDS $pid"
+  echo $pid > "$BENCH_ROOT/config/pids/$label.pid"
+  log "$label started (pid $pid)"
+}
+
+# ---------------------------------------------------------------------------
+# Datastores (MariaDB + Redis)
+# ---------------------------------------------------------------------------
+# Start dedicated MariaDB if socket or port not already in use
+if [ ! -S "$MYSQL_SOCKET" ] && ! nc -z 127.0.0.1 3306 2>/dev/null; then
+  log "Starting managed MariaDB daemon ($MYSQL_SOCKET)..."
+  start_process "mariadb" "$SCRIPT_DIR/vybench-mariadb-wrapper"
+  wait_for_socket "$MYSQL_SOCKET" "MariaDB" 60 || true
+fi
+
+# Start dedicated Redis if port 6379 not already in use
+if ! nc -z 127.0.0.1 6379 2>/dev/null; then
+  log "Starting managed Redis daemon..."
+  start_process "redis" redis-server --port 6379 --dir "$VYBENCH_VAR/redis" --daemonize no
+  wait_for_tcp 127.0.0.1 6379 "Redis" 30 || true
+fi
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+MODE="$(get_mode)"
+PORT="$(site_conf webserver_port)"; [ -n "$PORT" ] || PORT=8000
+BIND="$(vybench_config_get bind)"; [ -n "$BIND" ] || BIND=127.0.0.1
+WORKERS="$(site_conf gunicorn_workers)"; [ -n "$WORKERS" ] || WORKERS=2
+
+log "Mode: $MODE | Web: $BIND:$PORT | Gunicorn workers: $WORKERS"
+
+# ---------------------------------------------------------------------------
+# Shutdown handler
+# ---------------------------------------------------------------------------
+shutdown_all() {
+  log "Shutting down all Frappe services..."
+  for pid in $CHILD_PIDS; do
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -TERM "$pid" 2>/dev/null || true
+    fi
+  done
+  # Give up to 10s for graceful exit
+  local timeout=10
+  while [ $timeout -gt 0 ]; do
+    local all_done=1
+    for pid in $CHILD_PIDS; do
+      kill -0 "$pid" 2>/dev/null && { all_done=0; break; }
+    done
+    [ "$all_done" = "1" ] && break
+    sleep 1
+    timeout=$((timeout - 1))
+  done
+  # Force-kill any survivors
+  for pid in $CHILD_PIDS; do
+    kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null || true
+  done
+  log "All services stopped."
+  exit 0
+}
+
+trap shutdown_all TERM INT QUIT
+
+# ---------------------------------------------------------------------------
+# Start application tier
+# ---------------------------------------------------------------------------
+cd "$BENCH_ROOT"
+
+if [ "$MODE" = "developer" ]; then
+  # Developer mode: bench serve (werkzeug auto-reloader)
+  start_process "web" "$BENCH_PY" "$BENCH_CLI" serve --port "$PORT"
+else
+  # Production mode: gunicorn
+  start_process "web" "$BENCH_PY" -m gunicorn \
+    -b "${BIND}:${PORT}" \
+    -w "$WORKERS" \
+    'frappe.app:application_with_statics()' \
+    --chdir "$BENCH_ROOT/sites"
+fi
+
+# Workers — default, short, long
+start_process "worker-default" "$BENCH_PY" "$BENCH_CLI" worker --queue default
+start_process "worker-short"   "$BENCH_PY" "$BENCH_CLI" worker --queue short
+start_process "worker-long"    "$BENCH_PY" "$BENCH_CLI" worker --queue long
+
+# Scheduler
+start_process "scheduler" "$BENCH_PY" "$BENCH_CLI" schedule
+
+# SocketIO (Node realtime server)
+export NODE_PATH="$BENCH_ROOT/apps/frappe/node_modules"
+start_process "socketio" node "$BENCH_ROOT/apps/frappe/socketio.js"
+
+log "All Frappe services started."
+
+# ---------------------------------------------------------------------------
+# Monitor children — restart any that die unexpectedly (production only)
+# ---------------------------------------------------------------------------
+while true; do
+  for pid in $CHILD_PIDS; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      log_err "Child pid $pid exited unexpectedly (production keeps running)."
+    fi
+  done
+  sleep 5
+done

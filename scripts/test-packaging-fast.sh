@@ -38,7 +38,7 @@ try()  { if eval "$2" >/dev/null 2>&1; then ok "$1"; else bad "$1"; fi; }
 echo "==> static checks"
 
 for f in "$ROOT"/scripts/*.sh "$ROOT"/scripts/lib/*.sh "$ROOT"/scripts/templates/vybench-setup \
-         "$ROOT"/snap/local/bin/*; do
+         "$ROOT"/snap/local/bin/* "$ROOT"/brew/bin/* "$ROOT"/brew/libexec/*; do
   [ -f "$f" ] || continue
   case "$f" in *.json|*.template) continue ;; esac
   if bash -n "$f" 2>/dev/null; then :; else bad "shell syntax: ${f#"$ROOT"/}"; fi
@@ -47,7 +47,8 @@ ok "shell syntax (all scripts)"
 
 if command -v shellcheck >/dev/null 2>&1; then
   if shellcheck -S warning "$ROOT"/scripts/*.sh "$ROOT"/scripts/lib/*.sh \
-       "$ROOT"/scripts/templates/vybench-setup 2>/dev/null; then
+       "$ROOT"/scripts/templates/vybench-setup \
+       "$ROOT"/brew/bin/* "$ROOT"/brew/libexec/* 2>/dev/null; then
     ok "shellcheck (warning level)"
   else
     bad "shellcheck (warning level)"
@@ -62,11 +63,15 @@ fi
 if python3 -c 'import yaml' 2>/dev/null; then
   try "snapcraft.yaml is valid YAML" \
       "python3 -c \"import yaml;yaml.safe_load(open('$ROOT/snap/snapcraft.yaml'))\""
+  try "snapcraft.postgres.yaml is valid YAML" \
+      "python3 -c \"import yaml;yaml.safe_load(open('$ROOT/snap/snapcraft.postgres.yaml'))\""
 else
   echo "  SKIP  snapcraft.yaml YAML check (PyYAML not installed)"
 fi
-try "common_site_config.json is valid JSON" \
+try "common_site_config.json (scripts) is valid JSON" \
     "python3 -c \"import json;json.load(open('$ROOT/scripts/templates/common_site_config.json'))\""
+try "common_site_config.json (brew) is valid JSON" \
+    "python3 -c \"import json;json.load(open('$ROOT/brew/etc/vybench/common_site_config.json'))\""
 
 # frappe resolves redis and the database through this file; a typo here surfaces
 # only at runtime, as a site that cannot connect to anything.

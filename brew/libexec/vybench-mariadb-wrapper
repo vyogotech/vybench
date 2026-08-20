@@ -1,0 +1,89 @@
+#!/bin/bash
+# vybench-mariadb-wrapper — dedicated MariaDB daemon configured for Frappe on macOS.
+#
+# Mirrors snap/local/bin/mariadb-wrapper:
+# 1. Initializes private MariaDB database under $VYBENCH_VAR/mariadb if not present.
+# 2. Sets character sets (utf8mb4), collation (utf8mb4_unicode_ci), and max packet.
+# 3. Automatically provisions root password and saves it to common_site_config.json.
+# 4. Runs mariadbd bound to $VYBENCH_RUN/mysql.sock.
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "$SCRIPT_DIR/vybench-common.sh"
+
+bootstrap_dirs
+
+DATA_DIR="$VYBENCH_VAR/mariadb"
+SOCKET="$VYBENCH_RUN/mysql.sock"
+PID_FILE="$VYBENCH_VAR/mariadb/mariadb.pid"
+
+mkdir -p "$DATA_DIR" "$VYBENCH_RUN"
+
+MARIADB_BASE="$(brew --prefix mariadb 2>/dev/null || echo /opt/homebrew/opt/mariadb)"
+
+if [ ! -d "$DATA_DIR/mysql" ]; then
+  echo "vybench: Initializing MariaDB system database in $DATA_DIR..."
+  mariadb-install-db \
+    --basedir="$MARIADB_BASE" \
+    --datadir="$DATA_DIR" \
+    --auth-root-authentication-method=normal \
+    --skip-test-db
+
+  ROOT_PW=$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20)
+  INIT_SOCK="$DATA_DIR/init.sock"
+
+  mariadbd \
+    --basedir="$MARIADB_BASE" \
+    --datadir="$DATA_DIR" \
+    --socket="$INIT_SOCK" \
+    --pid-file="$DATA_DIR/init.pid" \
+    --skip-networking &
+  INIT_PID=$!
+
+  for _ in $(seq 1 60); do
+    [ -S "$INIT_SOCK" ] && break
+    sleep 1
+  done
+
+  mariadb -u root -S "$INIT_SOCK" -e "
+    SET PASSWORD FOR 'root'@'localhost' = PASSWORD('$ROOT_PW');
+    CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED BY '$ROOT_PW';
+    SET PASSWORD FOR 'root'@'127.0.0.1' = PASSWORD('$ROOT_PW');
+    GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost' WITH GRANT OPTION;
+    GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' WITH GRANT OPTION;
+    FLUSH PRIVILEGES;"
+
+  mariadb-admin -u root -p"$ROOT_PW" -S "$INIT_SOCK" shutdown
+  wait "$INIT_PID" 2>/dev/null || true
+  rm -f "$INIT_SOCK" "$DATA_DIR/init.pid"
+
+  echo "$ROOT_PW" > "$DATA_DIR/root_password"
+
+  # Seed root_password and socket path into common_site_config.json
+  CFG="$BENCH_ROOT/sites/common_site_config.json"
+  if [ -f "$CFG" ]; then
+    "$BENCH_PY" - "$CFG" "$ROOT_PW" "$SOCKET" <<'PYEOF'
+import json, sys
+path, pw, sock = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path) as fh:
+    cfg = json.load(fh)
+cfg["root_password"] = pw
+cfg["db_socket"] = sock
+with open(path, "w") as fh:
+    json.dump(cfg, fh, indent=2)
+PYEOF
+  fi
+  echo "vybench: MariaDB initialized; credentials saved to common_site_config.json"
+fi
+
+exec mariadbd \
+  --basedir="$MARIADB_BASE" \
+  --datadir="$DATA_DIR" \
+  --socket="$SOCKET" \
+  --pid-file="$PID_FILE" \
+  --port=3306 \
+  --bind-address=127.0.0.1 \
+  --character-set-server=utf8mb4 \
+  --collation-server=utf8mb4_unicode_ci \
+  --max-allowed-packet=256M \
+  --innodb-file-per-table=1

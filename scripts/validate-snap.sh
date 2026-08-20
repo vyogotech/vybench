@@ -46,8 +46,8 @@ if [ -f "$TARGET" ] && [[ "$TARGET" == *.snap ]]; then
   fi
 fi
 
-if [ -f "$TARGET" ] && [[ "$TARGET" == *"snapcraft.yaml" ]]; then
-  echo "--- Static Validation of snapcraft.yaml ---"
+if [ -f "$TARGET" ] && [[ "$TARGET" == *.yaml ]]; then
+  echo "--- Static Validation of $TARGET ---"
   
   # Check 1: Ensure node_modules symlink cleanup is dynamic (find ... -name node_modules -delete)
   if grep -q 'find .* -name "node_modules" -delete' "$TARGET" || grep -q 'find .* -name node_modules -delete' "$TARGET"; then

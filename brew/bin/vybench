@@ -1,0 +1,229 @@
+#!/bin/bash
+# vybench — macOS CLI wrapper for Frappe bench.
+#
+# Usage:
+#   vybench bench <bench-command>       run a bench command
+#   vybench set mode=developer          set configuration
+#   vybench get mode                    get configuration
+#   vybench start                       start all services via brew
+#   vybench stop                        stop all services via brew
+#   vybench restart                     restart all services via brew
+#   vybench status                      show service status
+#   vybench logs [service]              tail service logs
+#   vybench mysql                       open MariaDB client
+#   vybench redis-cli                   open Redis client
+#   vybench help                        show this help
+set -e
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+LIBEXEC_DIR="$(cd "$SCRIPT_DIR/../libexec" 2>/dev/null && pwd)"
+if [ ! -f "$LIBEXEC_DIR/vybench-common.sh" ]; then
+  if [ -f "/opt/homebrew/opt/vybench/libexec/vybench-common.sh" ]; then
+    LIBEXEC_DIR="/opt/homebrew/opt/vybench/libexec"
+  elif [ -f "/opt/homebrew/opt/vybench-local/libexec/vybench-common.sh" ]; then
+    LIBEXEC_DIR="/opt/homebrew/opt/vybench-local/libexec"
+  elif [ -f "/usr/local/opt/vybench/libexec/vybench-common.sh" ]; then
+    LIBEXEC_DIR="/usr/local/opt/vybench/libexec"
+  fi
+fi
+. "$LIBEXEC_DIR/vybench-common.sh"
+
+# ---------------------------------------------------------------------------
+# help
+# ---------------------------------------------------------------------------
+show_help() {
+  cat <<'EOF'
+
+  ╦  ╦┬ ┬┌┐ ┌─┐┌┐┌┌─┐┬ ┬
+  ╚╗╔╝└┬┘├┴┐├┤ ││││  ├─┤
+   ╚╝  ┴ └─┘└─┘┘└┘└─┘┴ ┴
+
+  Frappe Bench & ERPNext, packaged for macOS via Homebrew.
+
+  Frappe® and ERPNext® are trademarks of Frappe Technologies Pvt. Ltd.
+  This package is an independent distribution not affiliated with or
+  endorsed by Frappe Technologies.
+
+  ─────────────────────────────────────────────
+
+  QUICK START
+
+    brew services start mariadb          # start database (once)
+    brew services start redis            # start cache (once)
+    brew services start vybench          # start Frappe services
+    vybench bench new-site mysite.localhost --admin-password admin
+    # → Open http://mysite.localhost:8000
+
+  SERVICES
+
+    vybench start                        start all services
+    vybench stop                         stop all services
+    vybench restart                      restart all services
+    vybench status                       show service status
+    vybench logs web                     tail web log
+    vybench logs worker-default          tail worker log
+
+  CONFIGURATION
+
+    vybench set mode=developer           switch to dev mode
+    vybench set mode=production          switch to prod mode
+    vybench set bind=0.0.0.0            expose web on LAN
+    vybench get mode                     view current mode
+
+  BENCH COMMANDS
+
+    vybench bench new-site mysite.localhost --admin-password admin
+    vybench bench get-app hrms --branch version-16
+    vybench bench --site mysite.localhost install-app hrms
+    vybench bench --site mysite.localhost list-apps
+    vybench bench --site mysite.localhost build
+
+  CLIENT TOOLS
+
+    vybench mysql                        MariaDB client
+    vybench redis-cli                    Redis client
+
+  DATA & PATHS
+
+    Sites & config   $(brew --prefix)/var/vybench/bench/sites/
+    Database files   $(brew --prefix)/var/vybench/mariadb/
+    Logs             $(brew --prefix)/var/log/vybench/
+    MariaDB socket   $(brew --prefix)/var/run/vybench/mysql.sock
+
+  MORE INFO
+
+    Docs:   https://github.com/vyogotech/vybench
+    Issues: https://github.com/vyogotech/vybench/issues
+
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# dispatch
+# ---------------------------------------------------------------------------
+CMD="${1:-help}"
+shift || true
+
+case "$CMD" in
+  # ── bench passthrough ──────────────────────────────────────────────────
+  bench)
+    bootstrap_common
+    if [ "$1" = "init" ]; then
+      # If running `bench init`, inject --python $PYTHON automatically if omitted
+      has_python=0
+      for arg in "$@"; do
+        if [ "$arg" = "--python" ]; then has_python=1; break; fi
+      done
+      if [ $has_python -eq 0 ]; then
+        set -- "$@" --python "$PYTHON"
+      fi
+    elif [ ! -f "Procfile" ] && [ ! -d "sites" ]; then
+      # Not in a custom bench folder -> use default vybench managed bench
+      cd "$BENCH_ROOT"
+    fi
+    exec "$BENCH_PY" "$BENCH_CLI" "$@"
+    ;;
+
+  # ── configuration ──────────────────────────────────────────────────────
+  set)
+    # e.g.: vybench set mode=developer
+    for pair in "$@"; do
+      key="${pair%%=*}"
+      val="${pair#*=}"
+      vybench_config_set "$key" "$val"
+      echo "vybench: $key set to '$val'"
+    done
+
+    # Apply mode change immediately
+    MODE="$(get_mode)"
+    CFG="$BENCH_ROOT/sites/common_site_config.json"
+    if [ -f "$CFG" ]; then
+      if [ "$MODE" = "developer" ]; then DEV=1; else DEV=0; fi
+      "$BENCH_PY" - "$CFG" "$DEV" <<'PYEOF' 2>/dev/null || true
+import json, sys
+path, dev = sys.argv[1], int(sys.argv[2])
+with open(path) as fh:
+    cfg = json.load(fh)
+cfg["developer_mode"] = dev
+with open(path, "w") as fh:
+    json.dump(cfg, fh, indent=2)
+PYEOF
+      echo "vybench: developer_mode set to $DEV in common_site_config.json"
+    fi
+
+    # Materialise bench for developer mode
+    if [ "$MODE" = "developer" ]; then
+      materialise_bench
+    fi
+    ;;
+
+  get)
+    key="${1:-mode}"
+    val="$(vybench_config_get "$key")"
+    [ -n "$val" ] && echo "$val" || echo "(not set — default: production)"
+    ;;
+
+  # ── service control ────────────────────────────────────────────────────
+  start)
+    echo "Starting vybench services ($VYBENCH_NAME, mariadb, redis)..."
+    brew services start mariadb 2>/dev/null || true
+    brew services start redis   2>/dev/null || true
+    brew services start "$VYBENCH_NAME"
+    ;;
+
+  stop)
+    brew services stop "$VYBENCH_NAME"
+    ;;
+
+  restart)
+    brew services restart "$VYBENCH_NAME"
+    ;;
+
+  status)
+    brew services list | grep -E "^(vybench|mariadb|redis)" || \
+      echo "No vybench-related services found in brew services."
+    ;;
+
+  # ── logs ───────────────────────────────────────────────────────────────
+  logs)
+    svc="${1:-web}"
+    logfile="$VYBENCH_LOG/${svc}.log"
+    if [ -f "$logfile" ]; then
+      exec tail -f "$logfile"
+    else
+      echo "No log file found at $logfile" >&2
+      echo "Available logs in $VYBENCH_LOG:" >&2
+      ls "$VYBENCH_LOG"/ 2>/dev/null || echo "(none yet)" >&2
+      exit 1
+    fi
+    ;;
+
+  # ── client tools ───────────────────────────────────────────────────────
+  mysql)
+    exec mariadb -u root --socket="$MYSQL_SOCKET" "$@"
+    ;;
+
+  mysqldump)
+    exec mariadb-dump -u root --socket="$MYSQL_SOCKET" "$@"
+    ;;
+
+  redis-cli)
+    exec redis-cli "$@"
+    ;;
+
+  # ── help ───────────────────────────────────────────────────────────────
+  help|--help|-h)
+    show_help
+    ;;
+
+  *)
+    echo "vybench: unknown command '$CMD'. Run 'vybench help' for usage." >&2
+    exit 1
+    ;;
+esac

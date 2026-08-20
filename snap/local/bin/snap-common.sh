@@ -10,10 +10,12 @@
 
 DAEMON_USER=snap_daemon
 
+SNAP_NAME="${SNAP_INSTANCE_NAME:-vybench}"
+
 # $SNAP is revision-specific (/snap/vybench/x11). Anything persisted into
 # $SNAP_COMMON and expected to survive a refresh must point at the revision
 # -stable `current` symlink instead, or it dangles after the next upgrade.
-SNAP_STABLE=/snap/vybench/current
+SNAP_STABLE="/snap/$SNAP_NAME/current"
 
 # Where the live apps/ and env/ actually are.
 #
@@ -30,7 +32,7 @@ fi
 BENCH_PY="$BENCH_ROOT/env/bin/python3.14"
 BENCH_CLI="$BENCH_ROOT/env/bin/bench"
 
-export PATH="$SNAP/usr/sbin:$SNAP/usr/bin:$SNAP/sbin:$SNAP/bin:$BENCH_ROOT/env/bin:$PATH"
+export PATH="$SNAP/usr/sbin:$SNAP/usr/bin:$SNAP/sbin:$SNAP/bin:$SNAP/usr/lib/postgresql/16/bin:$SNAP/usr/lib/postgresql/15/bin:$BENCH_ROOT/env/bin:$PATH"
 export LD_LIBRARY_PATH="$SNAP/usr/lib/x86_64-linux-gnu:$SNAP/usr/lib/aarch64-linux-gnu:$SNAP/usr/lib:$SNAP/lib/x86_64-linux-gnu:$SNAP/lib/aarch64-linux-gnu:$SNAP/lib:$LD_LIBRARY_PATH"
 export PYTHONPATH="$BENCH_ROOT/apps/frappe:$BENCH_ROOT/env/lib/python3.14/site-packages"
 # The socket lives OUTSIDE the data directory on purpose. The datadir holds the
@@ -38,7 +40,12 @@ export PYTHONPATH="$BENCH_ROOT/apps/frappe:$BENCH_ROOT/env/lib/python3.14/site-p
 # directory is world-traversable so any local user can connect without being
 # added to a group. Connecting is not authorisation -- MariaDB still demands the
 # generated root password -- so an open socket costs nothing.
-export MYSQL_UNIX_PORT="$SNAP_COMMON/run/mysql.sock"
+if [ "$SNAP_NAME" != "vybench-postgres" ]; then
+  export MYSQL_UNIX_PORT="$SNAP_COMMON/run/mysql.sock"
+fi
+export PGHOST="$SNAP_COMMON/run"
+export PGPORT="5432"
+export PGSHAREDIR="$SNAP/usr/share/postgresql/16"
 
 # The bench baked into $SNAP has its own sites/common_site_config.json left over
 # from `bench init`, carrying bench's DEFAULT ports (redis_queue 11000,
@@ -76,15 +83,15 @@ umask 002
 # mariadbd and redis always run as that account. The bench tree is deliberately
 # not touched here -- see bootstrap_bench.
 bootstrap_datastores() {
-  mkdir -p "$SNAP_COMMON/mariadb" "$SNAP_COMMON/redis" "$SNAP_COMMON/run" 2>/dev/null || true
+  mkdir -p "$SNAP_COMMON/mariadb" "$SNAP_COMMON/postgres" "$SNAP_COMMON/redis" "$SNAP_COMMON/run" 2>/dev/null || true
 
   if [ "$(id -u)" = "0" ]; then
     chown "$DAEMON_USER:$DAEMON_USER" \
-      "$SNAP_COMMON/mariadb" "$SNAP_COMMON/redis" "$SNAP_COMMON/run" 2>/dev/null || true
+      "$SNAP_COMMON/mariadb" "$SNAP_COMMON/postgres" "$SNAP_COMMON/redis" "$SNAP_COMMON/run" 2>/dev/null || true
   fi
 
   # Database files stay private...
-  chmod u+rwx,g+rwxs,o-rwx "$SNAP_COMMON/mariadb" "$SNAP_COMMON/redis" 2>/dev/null || true
+  chmod u+rwx,g+rwxs,o-rwx "$SNAP_COMMON/mariadb" "$SNAP_COMMON/postgres" "$SNAP_COMMON/redis" 2>/dev/null || true
   # ...but the socket directory is traversable, so `bench` works for any local
   # user with no group membership. Auth still gates actual database access.
   chmod 0755 "$SNAP_COMMON/run" 2>/dev/null || true
@@ -135,6 +142,22 @@ bootstrap_common() {
   if [ ! -f "$SNAP_COMMON/bench/sites/common_site_config.json" ]; then
     as_daemon cp "$SNAP/config/common_site_config.json" \
        "$SNAP_COMMON/bench/sites/common_site_config.json" 2>/dev/null || true
+    
+    # Ensure db_type is postgres in common_site_config.json when running under postgres snap
+    if { [ -f "$SNAP/bin/postgres-wrapper" ] || [[ "$SNAP_NAME" == *"postgres"* ]]; }; then
+      as_daemon "$SNAP/opt/frappe-bench/env/bin/python3.14" - "$SNAP_COMMON/bench/sites/common_site_config.json" <<'PYEOF' || true
+import json, sys
+path = sys.argv[1]
+with open(path) as fh:
+    cfg = json.load(fh)
+cfg["db_type"] = "postgres"
+cfg["db_port"] = 5432
+cfg["db_host"] = "127.0.0.1"
+cfg.pop("db_socket", None)
+with open(path, "w") as fh:
+    json.dump(cfg, fh, indent=1)
+PYEOF
+    fi
   fi
 
   # Shared-write surface between the snap_daemon services and the CLI user.
@@ -205,6 +228,22 @@ materialise_bench() {
     as_daemon cp -a "$SRC/sites/assets" "$B/sites/assets"
   fi
 
+  # Ensure db_type is postgres in common_site_config.json when running under postgres snap
+  if [ -f "$B/sites/common_site_config.json" ] && { [ -f "$SNAP/bin/postgres-wrapper" ] || [[ "$SNAP_NAME" == *"postgres"* ]]; }; then
+    as_daemon "$SNAP/opt/frappe-bench/env/bin/python3.14" - "$B/sites/common_site_config.json" <<'PYEOF' || true
+import json, sys
+path = sys.argv[1]
+with open(path) as fh:
+    cfg = json.load(fh)
+cfg["db_type"] = "postgres"
+cfg["db_port"] = 5432
+cfg["db_host"] = "127.0.0.1"
+cfg.pop("db_socket", None)
+with open(path, "w") as fh:
+    json.dump(cfg, fh, indent=1)
+PYEOF
+  fi
+
   # The venv's interpreter link is relative (../../../../usr/bin/python3.14),
   # which counts four levels from $SNAP/opt/frappe-bench/env/bin but lands on
   # /var/snap/vybench/usr/bin from the copied location -- a dangling link that
@@ -214,8 +253,14 @@ materialise_bench() {
     as_daemon ln -sfn "$SNAP_STABLE/usr/bin/python3.14" "$B/env/bin/python3.14"
     as_daemon ln -sfn python3.14 "$B/env/bin/python3"
     as_daemon ln -sfn python3.14 "$B/env/bin/python"
-    as_daemon find "$B/env/bin" -type f -exec sed -i '1s|^#!/build/.*python.*|#!/usr/bin/env python3|' {} + 2>/dev/null || true
+    as_daemon find "$B/env/bin" -type f -exec sed -i '1s|^#!/.*/python.*|#!/usr/bin/env python3|' {} + 2>/dev/null || true
     [ -e "$B/env/bin/python3.14" ] || echo "WARNING: materialised venv python is dangling" >&2
+  fi
+
+  # Rewrite build-time part install paths in site-packages pth/egg-link files to point to $B
+  if [ -d "$B/env/lib/python3.14/site-packages" ]; then
+    as_daemon find "$B/env/lib/python3.14/site-packages" -type f \( -name "*.pth" -o -name "*.py" -o -name "*.egg-link" \) \
+      -exec sed -i "s|/tmp/vybench/parts/frappe-bench/install/opt/frappe-bench|$B|g; s|/root/parts/frappe-bench/install/opt/frappe-bench|$B|g; s|$SNAP/opt/frappe-bench|$B|g" {} + 2>/dev/null || true
   fi
 
   if [ "$(id -u)" = "0" ]; then
@@ -238,18 +283,18 @@ require_bench_access() {
   [ -w "$probe" ] && return 0            # already writable -- say nothing
 
   cat >&2 <<EOF
-vybench: the bench at $SNAP_COMMON/bench is owned by '$DAEMON_USER' and is not
+$SNAP_NAME: the bench at $SNAP_COMMON/bench is owned by '$DAEMON_USER' and is not
 writable by $(id -un).
 
 This install is in production mode, where the services own the bench. Either:
 
-  sudo vybench.bench $*
+  sudo $SNAP_NAME.bench $*
       run the command as the service account (no setup needed), or
 
   sudo usermod -aG $DAEMON_USER $(id -un)   # then re-login, or: newgrp $DAEMON_USER
       grant yourself permanent access, like docker's post-install step.
 
-A developer install (snap set vybench mode=developer) needs neither.
+A developer install (snap set $SNAP_NAME mode=developer) needs neither.
 EOF
   return 1
 }

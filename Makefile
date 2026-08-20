@@ -2,16 +2,21 @@ DISTRO      ?= ubuntu:24.04
 FRAPPE_BRANCH ?= version-16
 FRAPPE_APPS ?= erpnext
 
-.PHONY: help payload deb rpm snap snap-remote test drift-check validate-snap
+.PHONY: help payload deb rpm snap snap-postgres snap-remote brew brew-audit brew-test brew-local-test test drift-check validate-snap validate-snap-postgres
 help:
 	@echo "payload      - build the bench payload for DISTRO=$(DISTRO)"
 	@echo "deb          - build a .deb from the payload in dist/"
 	@echo "rpm          - build an .rpm from the payload in dist/"
-	@echo "snap         - build the snap for the host arch (needs snapcraft; Linux only)"
+	@echo "snap         - build the MariaDB snap for the host arch (needs snapcraft; Linux only)"
+	@echo "snap-postgres - build the PostgreSQL develop snap for the host arch (needs snapcraft; Linux only)"
 	@echo "snap-remote  - build amd64 AND arm64 on Launchpad (source becomes public)"
+	@echo "brew         - install the Homebrew formula from source (macOS only)"
+	@echo "brew-audit   - run brew audit checks on the formula"
+	@echo "brew-test    - run brew test on the installed formula"
 	@echo "test         - install the built package in a clean container and verify"
 	@echo "drift-check  - compare the vendored nginx template against upstream"
 	@echo "validate-snap - run pre-flight snap validation checks"
+	@echo "validate-snap-postgres - run pre-flight snap validation checks for postgres snap"
 
 payload:
 	./scripts/build-bench-payload.sh --distro "$(DISTRO)" \
@@ -23,8 +28,39 @@ deb:
 rpm:
 	./scripts/package-rpm.sh --output ./dist
 
+brew:
+	brew install --build-from-source ./brew/Formula/vybench.rb
+
+brew-audit:
+	brew audit --new --strict ./brew/Formula/vybench.rb
+
+brew-test:
+	brew test vybench
+
+# Rebuild the local-test tarball, update its SHA256 in the formula, and install.
+# Safe to re-run: brew reinstalls if already present.
+brew-local-test:
+	@echo "==> Building local test tarball..."
+	rm -rf /tmp/vybench-16.0.0
+	mkdir /tmp/vybench-16.0.0
+	rsync -a --exclude='.git' --exclude='dist/*.deb' \
+	         --exclude='dist/*.tar.gz' --exclude='dist/*.snap' \
+	         . /tmp/vybench-16.0.0/
+	cd /tmp && tar czf vybench-test.tar.gz vybench-16.0.0/
+	@SHA=$$(shasum -a 256 /tmp/vybench-test.tar.gz | awk '{print $$1}'); \
+	  echo "==> SHA256: $$SHA"; \
+	  sed -i.bak "s|sha256 \"[0-9a-f]*\"|sha256 \"$$SHA\"|" brew/Formula/vybench-local.rb && \
+	  rm -f brew/Formula/vybench-local.rb.bak
+	@echo "==> Installing vybench-local (this takes ~10 min on first run)..."
+	brew uninstall --ignore-dependencies vybench-local 2>/dev/null || true
+	brew install --build-from-source ./brew/Formula/vybench-local.rb
+
 snap:
 	mkdir -p dist && snapcraft pack --output=dist/vybench_$(shell uname -m).snap
+
+snap-postgres:
+	cp snap/snapcraft.postgres.yaml snap/snapcraft.yaml
+	mkdir -p dist && snapcraft pack --output=dist/vybench-postgres_$(shell uname -m).snap
 
 # Builds every architecture in snapcraft.yaml's `platforms` on Canonical's
 # Launchpad build farm. This is how arm64 gets built without a GitHub Team plan
@@ -51,3 +87,7 @@ drift-check:
 
 validate-snap:
 	./scripts/validate-snap.sh
+
+validate-snap-postgres:
+	./scripts/validate-snap.sh snap/snapcraft.postgres.yaml
+

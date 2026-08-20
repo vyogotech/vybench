@@ -63,6 +63,10 @@ jobs:
             snap:
               - 'snap/**'
               - 'scripts/test-snap-package.sh'
+            # macOS Homebrew code only.
+            brew:
+              - 'brew/**'
+              - 'Makefile'
             # Touches both, so both must be rebuilt. The nginx template is here
             # because the snap and the native packages both render it, and the
             # fast tier's own harness is here because a change to it invalidates
@@ -183,7 +187,7 @@ jobs:
           if-no-files-found: error
 
   snap:
-    name: snap · amd64
+    name: snap · mariadb · amd64
     needs: [changes, fast]
     if: >-
       needs.changes.outputs.snap == 'true' ||
@@ -196,32 +200,121 @@ jobs:
       - uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1
         id: build
         with:
+          snapcraft-file: snap/snapcraft.yaml
           build-info: false
       - name: E2E Integration Test (Snap install, dev mode, app fetch, production)
         run: ./scripts/test-snap-package.sh "${{ steps.build.outputs.snap }}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: snap-ci
+          name: snap-ci-mariadb
           path: ${{ steps.build.outputs.snap }}
           retention-days: 7
           if-no-files-found: error
+
+  snap-postgres:
+    name: snap · postgres · amd64
+    needs: [changes, fast]
+    if: >-
+      needs.changes.outputs.snap == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
+      inputs.force_full
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1
+        id: build
+        with:
+          snapcraft-file: snap/snapcraft.postgres.yaml
+          build-info: false
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: snap-ci-postgres
+          path: ${{ steps.build.outputs.snap }}
+          retention-days: 7
+          if-no-files-found: error
+
+  brew:
+    name: brew · macOS (${{ matrix.os }})
+    needs: [changes, fast]
+    if: >-
+      needs.changes.outputs.brew == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
+      inputs.force_full
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Create and register tap
+        run: |
+          brew tap-new vyogotech/tap
+          cp brew/Formula/vybench-local.rb "$(brew --repository vyogotech/tap)/Formula/"
+          git -C "$(brew --repository vyogotech/tap)" add Formula/vybench-local.rb
+          git -C "$(brew --repository vyogotech/tap)" commit -m "Add local formula for CI"
+
+      - name: Audit Formula
+        run: |
+          brew audit --new --strict brew/Formula/vybench.rb
+
+      - name: Build & Install from Source
+        run: |
+          make brew-local-test
+
+      - name: Formula Test Block
+        run: |
+          brew test vyogotech/tap/vybench-local
+
+      - name: E2E Lifecycle & Multi-Bench Verification
+        run: |
+          # 1. Verify CLI help and versions
+          vybench help
+          vybench bench version
+
+          # 2. Verify Service Lifecycle
+          vybench start
+          sleep 5
+          vybench status
+          vybench restart
+          sleep 5
+          vybench status
+
+          # 3. Verify Mode Switching
+          vybench set mode=developer
+          [ "$(vybench get mode)" = "developer" ]
+          vybench set mode=production
+          [ "$(vybench get mode)" = "production" ]
+
+          # 4. Create Site and verify HTTP response
+          vybench bench new-site ci.localhost --admin-password admin --force
+          curl -f -I http://ci.localhost:8000/ || curl -f -I -H "Host: ci.localhost" http://127.0.0.1:8000/
+
+          # 5. Verify Multi-Bench creation
+          vybench bench init /tmp/ci-secondary-bench --frappe-branch version-16 --skip-redis-config-generation --no-backups --skip-assets
+          cd /tmp/ci-secondary-bench && vybench bench version
 
   # A single required status check. Without this, a branch protection rule has to
   # name each job, and a SKIPPED job is not a PASSED one.
   ci:
     name: CI
-    needs: [fast, deb, snap]
+    needs: [fast, deb, snap, snap-postgres, brew]
     if: always()
     runs-on: ubuntu-24.04
     steps:
       - name: Verdict
         run: |
-          echo "fast: ${{ needs.fast.result }}"
-          echo "deb:  ${{ needs.deb.result }}"
-          echo "snap: ${{ needs.snap.result }}"
+          echo "fast:          ${{ needs.fast.result }}"
+          echo "deb:           ${{ needs.deb.result }}"
+          echo "snap:          ${{ needs.snap.result }}"
+          echo "snap-postgres: ${{ needs.snap-postgres.result }}"
+          echo "brew:          ${{ needs.brew.result }}"
           # 'skipped' is a pass here: it means nothing relevant to that format
           # changed. 'failure' and 'cancelled' are not.
-          for r in "${{ needs.fast.result }}" "${{ needs.deb.result }}" "${{ needs.snap.result }}"; do
+          for r in "${{ needs.fast.result }}" "${{ needs.deb.result }}" "${{ needs.snap.result }}" "${{ needs.snap-postgres.result }}" "${{ needs.brew.result }}"; do
             case "$r" in
               success|skipped) ;;
               *) echo "::error::a required job did not succeed"; exit 1 ;;

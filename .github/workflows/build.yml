@@ -73,10 +73,10 @@ jobs:
 
           if [ "${{ inputs.include_arm64 }}" = "true" ] || \
              [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
-            SNAP="[{\"arch\":\"amd64\",\"runner\":\"ubuntu-24.04\"},{\"arch\":\"arm64\",\"runner\":$ARM_RUNNER}]"
+            SNAP="[{\"arch\":\"amd64\",\"runner\":\"ubuntu-24.04\",\"file\":\"snap/snapcraft.yaml\",\"flavor\":\"mariadb\"},{\"arch\":\"arm64\",\"runner\":$ARM_RUNNER,\"file\":\"snap/snapcraft.yaml\",\"flavor\":\"mariadb\"},{\"arch\":\"amd64\",\"runner\":\"ubuntu-24.04\",\"file\":\"snap/snapcraft.postgres.yaml\",\"flavor\":\"postgres\"},{\"arch\":\"arm64\",\"runner\":$ARM_RUNNER,\"file\":\"snap/snapcraft.postgres.yaml\",\"flavor\":\"postgres\"}]"
             DEB="[{\"distro\":\"ubuntu:24.04\",\"runner\":\"ubuntu-24.04\"},{\"distro\":\"debian:12\",\"runner\":\"ubuntu-24.04\"},{\"distro\":\"ubuntu:24.04\",\"runner\":$ARM_RUNNER}]"
           else
-            SNAP='[{"arch":"amd64","runner":"ubuntu-24.04"}]'
+            SNAP='[{"arch":"amd64","runner":"ubuntu-24.04","file":"snap/snapcraft.yaml","flavor":"mariadb"},{"arch":"amd64","runner":"ubuntu-24.04","file":"snap/snapcraft.postgres.yaml","flavor":"postgres"}]'
             DEB='[{"distro":"ubuntu:24.04","runner":"ubuntu-24.04"},{"distro":"debian:12","runner":"ubuntu-24.04"}]'
           fi
 
@@ -179,7 +179,7 @@ jobs:
   # snap -- concurrent with the .deb jobs
   # ---------------------------------------------------------------------------
   snap:
-    name: snap · ${{ matrix.arch }}
+    name: snap · ${{ matrix.flavor }} · ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     needs: matrix
@@ -194,9 +194,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/snapcraft
-          key: snap-${{ matrix.arch }}-${{ hashFiles('snap/snapcraft.yaml') }}
+          key: snap-${{ matrix.flavor }}-${{ matrix.arch }}-${{ hashFiles(matrix.file) }}
           restore-keys: |
-            snap-${{ matrix.arch }}-
+            snap-${{ matrix.flavor }}-${{ matrix.arch }}-
 
       # Canonical's official action. It provisions LXD correctly, which the
       # previous hand-rolled setup could not: `usermod -aG lxd $USER` followed by
@@ -206,6 +206,7 @@ jobs:
         id: build
         uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1
         with:
+          snapcraft-file: ${{ matrix.file }}
           # Omits snap/manifest.yaml. The store uses it to flag vulnerable
           # stage-packages, but it also enumerates everything the snap was built
           # from -- which this being a private, commercial artefact argues against.
@@ -213,7 +214,7 @@ jobs:
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: snap-${{ matrix.arch }}
+          name: snap-${{ matrix.flavor }}-${{ matrix.arch }}
           path: ${{ steps.build.outputs.snap }}
           retention-days: 30
           if-no-files-found: error

@@ -8,9 +8,15 @@
 #   snap set vybench bind=0.0.0.0      # expose the web port on the LAN
 set -e
 
-# Datastores. Needed in BOTH modes -- `bench serve` is useless without a
-# database and a redis to talk to.
-INFRA="mariadb redis"
+SNAP_NAME="${SNAP_INSTANCE_NAME:-vybench}"
+
+if [ -f "$SNAP/bin/postgres-wrapper" ] || [[ "$SNAP_NAME" == *"postgres"* ]]; then
+  DB_SVC="postgres"
+else
+  DB_SVC="mariadb"
+fi
+
+INFRA="$DB_SVC redis"
 
 # The managed application tier. In developer mode these stay off: a developer
 # bench runs `bench serve` (or `bench start`) by hand, in the foreground, so
@@ -29,8 +35,8 @@ case "$MODE" in
 esac
 snapctl set mode="$MODE"
 
-enable_svc()  { for s in $1; do snapctl start --enable "vybench.$s" 2>/dev/null || true; done; }
-disable_svc() { for s in $1; do snapctl stop --disable "vybench.$s" 2>/dev/null || true; done; }
+enable_svc()  { for s in $1; do snapctl start --enable "$SNAP_NAME.$s" 2>/dev/null || true; done; }
+disable_svc() { for s in $1; do snapctl stop --disable "$SNAP_NAME.$s" 2>/dev/null || true; done; }
 
 enable_svc "$INFRA"
 

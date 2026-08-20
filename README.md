@@ -1,16 +1,44 @@
 # vybench
 
-**Frappe Bench v16 & ERPNext v16 Server Stack for Linux**
+**Frappe Bench v16 & ERPNext v16 — Linux & macOS**
 
-`vybench` packages Frappe v16, ERPNext v16, Python 3.14, Node.js 24, Redis 7, MariaDB, Nginx, and `wkhtmltopdf` into a portable, single-command Linux package.
+`vybench` packages Frappe v16, ERPNext v16, Python 3.14, Node.js 24, Redis 7, MariaDB, Nginx, and `wkhtmltopdf` into a portable, single-command package.
 
-Works out-of-the-box on **Ubuntu**, **Debian**, **Fedora**, **Arch**, **RHEL**, and any Linux distribution running `snapd`.
+Works out-of-the-box on **Ubuntu**, **Debian**, **Fedora**, **Arch**, **RHEL**, and any Linux distribution running `snapd`, and on **macOS** (Apple Silicon & Intel) via Homebrew.
 
 ---
 
 ## Quick Start
 
-### Installation
+### macOS (Homebrew)
+
+```bash
+# Add the vybench tap
+brew tap vyogotech/tap
+
+# Install vybench (builds from source — takes ~10 min on first install)
+brew install vybench
+
+# Start datastores (registered to auto-start at login)
+brew services start mariadb
+brew services start redis
+
+# Start the Frappe application tier
+brew services start vybench
+
+# Create your first site
+vybench bench new-site mysite.localhost --admin-password admin
+echo "127.0.0.1 mysite.localhost" | sudo tee -a /etc/hosts
+# → Open http://mysite.localhost:8000
+```
+
+Uninstall:
+```bash
+brew services stop vybench
+brew uninstall vybench
+```
+
+### Linux (Snap)
 
 Install from the Snap Store:
 ```bash
@@ -22,14 +50,10 @@ Or install a locally built `.snap` package:
 sudo snap install --dangerous vybench_16.0.0_amd64.snap
 ```
 
-### Uninstallation
-
 Remove the package and purge all associated services and runtime data:
 ```bash
 sudo snap remove --purge vybench
 ```
-
----
 
 ## Operating Modes
 
@@ -83,6 +107,24 @@ vybench.bench --site site1.localhost build
 
 ## Service Controls & Diagnostics
 
+### macOS (Homebrew)
+
+```bash
+# Check service status
+vybench status
+
+# Restart all Frappe services
+brew services restart vybench
+
+# Tail application logs
+vybench logs web           # gunicorn / bench serve
+vybench logs worker-default
+vybench logs scheduler
+vybench logs socketio
+```
+
+### Linux (Snap)
+
 ```bash
 # Check service status
 sudo snap services vybench
@@ -101,7 +143,19 @@ sudo snap logs -f vybench.web
 
 ## Building & Testing
 
-### Local Snap Build
+### macOS — Homebrew Formula
+```bash
+# Install from source (first install, ~10 min)
+make brew
+
+# Audit formula style and correctness
+make brew-audit
+
+# Run formula test block
+make brew-test
+```
+
+### Linux — Local Snap Build
 To build the snap package locally using `snapcraft`:
 
 ```bash

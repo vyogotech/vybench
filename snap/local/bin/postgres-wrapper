@@ -1,0 +1,73 @@
+#!/bin/bash
+set -e
+
+. "$SNAP/bin/snap-common.sh"
+
+bootstrap_datastores
+
+# Everything below this line runs as snap_daemon
+reexec_as_daemon "$0" "$@"
+
+DATA_DIR="$SNAP_COMMON/postgres"
+SOCKET_DIR="$SNAP_COMMON/run"
+PID_FILE="$SNAP_COMMON/postgres/postgres.pid"
+
+mkdir -p "$DATA_DIR" "$SOCKET_DIR"
+
+INITDB_BIN=$(find /usr/lib/postgresql -name initdb 2>/dev/null | head -1 || find "$SNAP/usr/lib/postgresql" -name initdb 2>/dev/null | head -1)
+POSTGRES_BIN=$(find /usr/lib/postgresql -name postgres 2>/dev/null | head -1 || find "$SNAP/usr/lib/postgresql" -name postgres 2>/dev/null | head -1)
+PSQL_BIN=$(find /usr/lib/postgresql -name psql 2>/dev/null | head -1 || find "$SNAP/usr/lib/postgresql" -name psql 2>/dev/null | head -1)
+PG_ISREADY_BIN=$(find /usr/lib/postgresql -name pg_isready 2>/dev/null | head -1 || find "$SNAP/usr/lib/postgresql" -name pg_isready 2>/dev/null | head -1)
+PG_SHARE_DIR=$(find /usr/share/postgresql "$SNAP/usr/share/postgresql" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+export PGSHAREDIR="$PG_SHARE_DIR"
+
+echo "DEBUG: INITDB_BIN=$INITDB_BIN"
+echo "DEBUG: POSTGRES_BIN=$POSTGRES_BIN"
+
+if [ ! -f "$DATA_DIR/PG_VERSION" ]; then
+  echo "DEBUG: Checking /usr/lib/postgresql/16/lib layout:"
+  ls -l /usr/lib/postgresql/16/lib || true
+  echo "DEBUG: Checking \$SNAP/usr/lib/postgresql/16/lib:"
+  ls -l "$SNAP/usr/lib/postgresql/16/lib" || true
+
+  echo "Initializing PostgreSQL system database in $DATA_DIR..."
+  "$INITDB_BIN" -D "$DATA_DIR" -L "$PG_SHARE_DIR" --username=postgres --auth=trust
+
+  ROOT_PW="postgres"
+
+  "$POSTGRES_BIN" -D "$DATA_DIR" -k "$SOCKET_DIR" -h "" -p 5432 &
+  INIT_PID=$!
+
+  for _ in $(seq 1 60); do
+    if "$PG_ISREADY_BIN" -h "$SOCKET_DIR" -p 5432 >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+
+  "$PSQL_BIN" -h "$SOCKET_DIR" -p 5432 -U postgres -d postgres -c "
+    ALTER USER postgres WITH PASSWORD '$ROOT_PW';
+    CREATE ROLE frappe WITH LOGIN SUPERUSER PASSWORD '$ROOT_PW';
+    ALTER ROLE frappe WITH PASSWORD '$ROOT_PW';
+  " || true
+
+  kill -15 "$INIT_PID" 2>/dev/null || true
+  wait "$INIT_PID" 2>/dev/null || true
+
+  echo "$ROOT_PW" > "$DATA_DIR/root_password"
+  "$BENCH_PY" - "$SNAP_COMMON/bench/sites/common_site_config.json" "$ROOT_PW" <<'PYEOF'
+import json, sys
+path, pw = sys.argv[1], sys.argv[2]
+with open(path) as fh:
+    cfg = json.load(fh)
+cfg["root_password"] = pw
+with open(path, "w") as fh:
+    json.dump(cfg, fh, indent=1)
+PYEOF
+  echo "PostgreSQL root password provisioned; stored in $DATA_DIR/root_password"
+fi
+
+chmod 700 "$DATA_DIR" 2>/dev/null || true
+chmod -R 700 "$DATA_DIR" 2>/dev/null || true
+
+exec "$POSTGRES_BIN" -D "$DATA_DIR" -k "$SOCKET_DIR" -h "127.0.0.1" -p 5432
