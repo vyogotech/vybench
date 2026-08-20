@@ -296,15 +296,23 @@ jobs:
           [ "$(vybench get mode)" = "production" ]
 
           # 4. Create Site and verify HTTP response
-          # The vybench MariaDB wrapper generates a random root password on
-          # first init and writes it to $VYBENCH_VAR/mariadb/root_password.
-          # Wait for that file so the vybench wrapper can auto-inject the
-          # credentials into bench new-site (avoids frappe calling getpass(),
-          # which raises EOFError in non-TTY CI contexts).
-          VB_PW_FILE="$(brew --prefix)/var/vybench-local/mariadb/root_password"
-          for _i in $(seq 1 30); do [ -f "$VB_PW_FILE" ] && break; sleep 2; done
-          [ -f "$VB_PW_FILE" ] || { echo "::error::MariaDB root_password file not found after 60s"; exit 1; }
-          vybench bench new-site ci.localhost --admin-password admin --force
+          # vybench-supervisor reuses the stock Homebrew MariaDB when it is
+          # already on port 3306 (which `vybench start` starts first). Stock
+          # Homebrew MariaDB has no root password, but frappe's
+          # get_root_connection() treats "" as falsy and falls through to
+          # getpass(), which raises EOFError without a TTY.
+          # Fix: wait for MariaDB, set a real non-empty root password via
+          # socket, then pass it explicitly so frappe never calls getpass().
+          MYSQL_SOCK="$(brew --prefix)/var/mysql/mysql.sock"
+          for _i in $(seq 1 30); do [ -S "$MYSQL_SOCK" ] && break; sleep 2; done
+          [ -S "$MYSQL_SOCK" ] || { echo "::error::MariaDB socket not ready after 60s"; exit 1; }
+          CI_DB_PW="vyci"
+          mariadb -u root --socket="$MYSQL_SOCK" -e "
+            GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost'  IDENTIFIED BY '$CI_DB_PW' WITH GRANT OPTION;
+            GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' IDENTIFIED BY '$CI_DB_PW' WITH GRANT OPTION;
+            FLUSH PRIVILEGES;"
+          vybench bench new-site ci.localhost --admin-password admin \
+            --db-root-username root --db-root-password "$CI_DB_PW" --force
           curl -f -I http://ci.localhost:8000/ || curl -f -I -H "Host: ci.localhost" http://127.0.0.1:8000/
 
           # 5. Verify Multi-Bench creation
