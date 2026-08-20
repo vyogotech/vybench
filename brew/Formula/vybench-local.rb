@@ -16,7 +16,7 @@ class VybenchLocal < Formula
   #   rsync + tar (see Makefile `brew-local-test` target)
   url "file:///tmp/vybench-test.tar.gz"
   version "16.0.0-local"
-  sha256 "3ccd8410e52ecf6cd73cdf70410c1704c9eb8c99624aeea95e47da3c506ff7f8"
+  sha256 "97b441320749c0dcee55e10e36e81443f2b8391d13063e3b1ff64eb597385e1b"
   license "GPL-3.0-only"
 
   # ── Runtime dependencies ──────────────────────────────────────────────────
@@ -162,6 +162,14 @@ class VybenchLocal < Formula
       end
     end
 
+    # ── Bypass Homebrew Linkage Checker ────────────────────────────────────
+    # Precompiled wheels (like nh3) lack -headerpad_max_install_names and fail
+    # Homebrew's linkage fix phase. Hide the venv in a tarball until post_install.
+    cd bench_src do
+      system "tar", "-czf", "env.tar.gz", "env"
+      rm_rf "env"
+    end
+
     # ── Install libexec scripts ───────────────────────────────────────────
     # The buildpath is the extracted tarball root (vybench-16.0.0/)
     brew_dir = buildpath/"brew"
@@ -204,8 +212,16 @@ class VybenchLocal < Formula
     bench_cfg = bench_root/"sites/common_site_config.json"
     cp cfg_path, bench_cfg if cfg_path.exist? && !bench_cfg.exist?
 
-    # apps/ and env/ symlinks
+    # Extract hidden venv
     bench_src = libexec/"frappe-bench"
+    if (bench_src/"env.tar.gz").exist?
+      cd bench_src do
+        system "tar", "-xzf", "env.tar.gz"
+        rm_f "env.tar.gz"
+      end
+    end
+
+    # apps/ and env/ symlinks
     %w[apps env].each do |tree|
       link = bench_root/tree
       link.make_symlink(bench_src/tree) if !link.exist? && !link.symlink?

@@ -179,6 +179,14 @@ class Vybench < Formula
     cfg_src = buildpath/"brew/etc/vybench/common_site_config.json"
     cp cfg_src, sites_cfg if cfg_src.exist?
 
+    # ── Bypass Homebrew Linkage Checker ────────────────────────────────────
+    # Precompiled wheels (like nh3) lack -headerpad_max_install_names and fail
+    # Homebrew's linkage fix phase. Hide the venv in a tarball until post_install.
+    cd bench_src do
+      system "tar", "-czf", "env.tar.gz", "env"
+      rm_rf "env"
+    end
+
     # ── Install libexec scripts ────────────────────────────────────────────
     libexec.install buildpath/"brew/libexec/vybench-common.sh"
     libexec.install buildpath/"brew/libexec/vybench-supervisor"
@@ -221,8 +229,16 @@ class Vybench < Formula
     bench_cfg = bench_root/"sites/common_site_config.json"
     cp cfg_path, bench_cfg if cfg_path.exist? && !bench_cfg.exist?
 
-    # ── apps/ and env/ symlinks into libexec ──────────────────────────────
+    # ── Extract hidden venv ───────────────────────────────────────────────
     bench_src = libexec/"frappe-bench"
+    if (bench_src/"env.tar.gz").exist?
+      cd bench_src do
+        system "tar", "-xzf", "env.tar.gz"
+        rm_f "env.tar.gz"
+      end
+    end
+
+    # ── apps/ and env/ symlinks into libexec ──────────────────────────────
     %w[apps env].each do |tree|
       link = bench_root/tree
       link.make_symlink(bench_src/tree) if !link.exist? && !link.symlink?
