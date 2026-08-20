@@ -296,21 +296,33 @@ jobs:
           [ "$(vybench get mode)" = "production" ]
 
           # 4. Create Site and verify HTTP response
-          # vybench-supervisor reuses the stock Homebrew MariaDB when it is
-          # already on port 3306 (which `vybench start` starts first). Stock
-          # Homebrew MariaDB has no root password, but frappe's
-          # get_root_connection() treats "" as falsy and falls through to
-          # getpass(), which raises EOFError without a TTY.
-          # Fix: wait for MariaDB, set a real non-empty root password via
-          # socket, then pass it explicitly so frappe never calls getpass().
-          MYSQL_SOCK="$(brew --prefix)/var/mysql/mysql.sock"
-          for _i in $(seq 1 30); do [ -S "$MYSQL_SOCK" ] && break; sleep 2; done
-          [ -S "$MYSQL_SOCK" ] || { echo "::error::MariaDB socket not ready after 60s"; exit 1; }
-          CI_DB_PW="vyci"
-          mariadb -u root --socket="$MYSQL_SOCK" -e "
-            GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost'  IDENTIFIED BY '$CI_DB_PW' WITH GRANT OPTION;
-            GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' IDENTIFIED BY '$CI_DB_PW' WITH GRANT OPTION;
-            FLUSH PRIVILEGES;"
+          # vybench-supervisor conditionally starts vybench-mariadb-wrapper
+          # (Case A) or reuses stock Homebrew MariaDB (Case B), depending on
+          # whether port 3306 is already occupied at supervisor startup time.
+          # Either way frappe's get_root_connection() needs a *truthy* password
+          # string — "" is falsy in Python so it falls through to getpass(),
+          # which raises EOFError without a TTY.
+          #
+          # Case A – vybench-managed MariaDB: supervisor saw port 3306 free,
+          #   started vybench-mariadb-wrapper, which generated a random root
+          #   password and wrote it to $VYBENCH_VAR/mariadb/root_password.
+          # Case B – Stock Homebrew MariaDB: supervisor saw port 3306 in use,
+          #   skipped its own wrapper; Homebrew installs with no root password.
+          #
+          # Strategy: wait for port 3306, detect which case applies, then
+          # either read the generated password (A) or set one via GRANT (B).
+          for _i in $(seq 1 60); do nc -z 127.0.0.1 3306 2>/dev/null && break; sleep 1; done
+          nc -z 127.0.0.1 3306 2>/dev/null || { echo "::error::MariaDB not ready on port 3306 after 60s"; exit 1; }
+          VB_PW_FILE="$(brew --prefix)/var/vybench-local/mariadb/root_password"
+          if [ -f "$VB_PW_FILE" ]; then
+            CI_DB_PW="$(cat "$VB_PW_FILE")"
+          else
+            CI_DB_PW="vyci"
+            mariadb -u root -e "
+              GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost'  IDENTIFIED BY '$CI_DB_PW' WITH GRANT OPTION;
+              GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' IDENTIFIED BY '$CI_DB_PW' WITH GRANT OPTION;
+              FLUSH PRIVILEGES;"
+          fi
           vybench bench new-site ci.localhost --admin-password admin \
             --db-root-username root --db-root-password "$CI_DB_PW" --force
           curl -f -I http://ci.localhost:8000/ || curl -f -I -H "Host: ci.localhost" http://127.0.0.1:8000/
