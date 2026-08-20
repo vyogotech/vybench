@@ -167,7 +167,7 @@ class VybenchLocal < Formula
     # Homebrew's linkage fix phase. Hide the venv in a tarball until post_install.
     cd bench_src do
       system "tar", "-czf", "env.tar.gz", "env"
-      rm_rf "env"
+      rm_r "env"
     end
 
     # ── Install libexec scripts ───────────────────────────────────────────
@@ -217,7 +217,7 @@ class VybenchLocal < Formula
     if (bench_src/"env.tar.gz").exist?
       cd bench_src do
         system "tar", "-xzf", "env.tar.gz"
-        rm_f "env.tar.gz"
+        rm "env.tar.gz"
       end
     end
 
