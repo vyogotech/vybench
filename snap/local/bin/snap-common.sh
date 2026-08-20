@@ -66,6 +66,11 @@ export FRAPPE_BENCH_ROOT="$SNAP_COMMON/bench"
 export GIT_CONFIG_COUNT=1
 export GIT_CONFIG_KEY_0=safe.directory
 export GIT_CONFIG_VALUE_0='*'
+# snap_daemon (and AppArmor) cannot read the host's /etc/gitconfig. Without
+# this, every `bench get-app` / `git clone` dies with:
+#   warning: unable to access '/etc/gitconfig': Permission denied
+#   fatal: unknown error occurred while reading the configuration files
+export GIT_CONFIG_NOSYSTEM=1
 
 # The tree is shared between the snap_daemon services and the host user who runs
 # `vybench.bench`, and neither can chown the other's files.
