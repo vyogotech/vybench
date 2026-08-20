@@ -105,13 +105,17 @@ jobs:
           if [ "$FORCE" = "true" ] || \
              [ "${{ github.event_name }}" != "push" ] || \
              [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
-            echo "snap_mariadb=true" >> "$GITHUB_OUTPUT"
-            echo "snap_postgres=true" >> "$GITHUB_OUTPUT"
-            echo "deb=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "snap_mariadb=true"
+              echo "snap_postgres=true"
+              echo "deb=true"
+            } >> "$GITHUB_OUTPUT"
           else
-            echo "snap_mariadb=${{ steps.filter.outputs.snap_mariadb }}" >> "$GITHUB_OUTPUT"
-            echo "snap_postgres=${{ steps.filter.outputs.snap_postgres }}" >> "$GITHUB_OUTPUT"
-            echo "deb=${{ steps.filter.outputs.deb }}" >> "$GITHUB_OUTPUT"
+            {
+              echo "snap_mariadb=${{ steps.filter.outputs.snap_mariadb }}"
+              echo "snap_postgres=${{ steps.filter.outputs.snap_postgres }}"
+              echo "deb=${{ steps.filter.outputs.deb }}"
+            } >> "$GITHUB_OUTPUT"
           fi
 
   # ---------------------------------------------------------------------------
