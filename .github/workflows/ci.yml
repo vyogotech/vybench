@@ -254,13 +254,16 @@ jobs:
       - name: Create and register tap
         run: |
           brew tap-new vyogotech/tap
-          cp brew/Formula/vybench-local.rb "$(brew --repository vyogotech/tap)/Formula/"
-          git -C "$(brew --repository vyogotech/tap)" add Formula/vybench-local.rb
-          git -C "$(brew --repository vyogotech/tap)" commit -m "Add local formula for CI"
+          TAP_DIR="$(brew --repository vyogotech/tap)/Formula"
+          cp brew/Formula/vybench-local.rb "$TAP_DIR/"
+          cp brew/Formula/vybench.rb "$TAP_DIR/"
+          git -C "$(brew --repository vyogotech/tap)" add Formula/
+          git -C "$(brew --repository vyogotech/tap)" commit -m "Add formulas for CI"
 
       - name: Audit Formula
         run: |
-          brew audit --new --strict brew/Formula/vybench.rb
+          # brew audit requires a name, not a file path (path-based audit was removed)
+          brew audit --new --strict vyogotech/tap/vybench
 
       - name: Build & Install from Source
         run: |
