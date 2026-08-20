@@ -42,6 +42,7 @@ jobs:
     outputs:
       deb: ${{ steps.filter.outputs.deb }}
       snap: ${{ steps.filter.outputs.snap }}
+      brew: ${{ steps.filter.outputs.brew }}
       shared: ${{ steps.filter.outputs.shared }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
