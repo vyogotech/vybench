@@ -354,9 +354,26 @@ EOF
 # else, so initgroups() -- which passes the account's real supplementary list --
 # is killed by the filter. Clearing is equivalent here anyway: the only group
 # that grants anything is the primary gid, which --regid already sets.
+# Point HOME and XDG_* at a writable tree owned by snap_daemon.
+# sudo/GHA often leave XDG_CONFIG_HOME=/home/<invoker>/.config; yarn then
+# tries to create /home/runner/.config/yarn and dies with EACCES after we
+# drop privileges. Override every path yarn/npm/node consult for config/cache.
+export_daemon_runtime_dirs() {
+  export HOME="$SNAP_COMMON/bench"
+  export XDG_CONFIG_HOME="$HOME/.config"
+  export XDG_CACHE_HOME="$HOME/.cache"
+  export XDG_DATA_HOME="$HOME/.local/share"
+  export YARN_CACHE_FOLDER="$HOME/.cache/yarn"
+  export npm_config_cache="$HOME/.cache/npm"
+  mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" \
+           "$YARN_CACHE_FOLDER" "$npm_config_cache" 2>/dev/null || true
+  chown -R "$DAEMON_USER:$DAEMON_USER" \
+    "$HOME/.config" "$HOME/.cache" "$HOME/.local" 2>/dev/null || true
+}
+
 run_as_daemon() {
   if [ "$(id -u)" = "0" ]; then
-    export HOME="$SNAP_COMMON/bench"
+    export_daemon_runtime_dirs
     exec setpriv --reuid="$DAEMON_USER" --regid="$DAEMON_USER" --clear-groups "$@"
   fi
   exec "$@"
@@ -369,7 +386,7 @@ run_as_daemon() {
 # Returns normally when already unprivileged, so the script simply continues.
 reexec_as_daemon() {
   if [ "$(id -u)" = "0" ]; then
-    export HOME="$SNAP_COMMON/bench"
+    export_daemon_runtime_dirs
     exec setpriv --reuid="$DAEMON_USER" --regid="$DAEMON_USER" --clear-groups "$@"
   fi
 }
