@@ -44,10 +44,38 @@ start_process() {
 # Datastores (MariaDB + Redis)
 # ---------------------------------------------------------------------------
 # Start dedicated MariaDB if socket or port not already in use
-if [ ! -S "$MYSQL_SOCKET" ] && ! nc -z 127.0.0.1 3306 2>/dev/null; then
-  log "Starting managed MariaDB daemon ($MYSQL_SOCKET)..."
+VYBENCH_MYSQL_SOCKET="$VYBENCH_RUN/mysql.sock"
+if [ ! -S "$VYBENCH_MYSQL_SOCKET" ] && ! nc -z 127.0.0.1 3306 2>/dev/null; then
+  log "Starting managed MariaDB daemon ($VYBENCH_MYSQL_SOCKET)..."
   start_process "mariadb" "$SCRIPT_DIR/vybench-mariadb-wrapper"
-  wait_for_socket "$MYSQL_SOCKET" "MariaDB" 60 || true
+  wait_for_socket "$VYBENCH_MYSQL_SOCKET" "MariaDB" 60 || true
+  MYSQL_SOCKET="$VYBENCH_MYSQL_SOCKET"
+  export MYSQL_UNIX_PORT="$MYSQL_SOCKET"
+elif [ ! -S "$VYBENCH_MYSQL_SOCKET" ] && nc -z 127.0.0.1 3306 2>/dev/null; then
+  # Reusing stock Homebrew MariaDB (or another server already on :3306).
+  # Retarget common_site_config so frappe does not try the non-existent
+  # vybench-managed socket baked into the formula's default config.
+  for _sock in "$HOMEBREW_PREFIX/var/mysql/mysql.sock" /tmp/mysql.sock; do
+    if [ -S "$_sock" ]; then
+      CFG="$BENCH_ROOT/sites/common_site_config.json"
+      if [ -f "$CFG" ] && [ -x "$BENCH_PY" ]; then
+        "$BENCH_PY" - "$CFG" "$_sock" <<'PYEOF' || true
+import json, sys
+path, sock = sys.argv[1], sys.argv[2]
+with open(path) as fh:
+    cfg = json.load(fh)
+if cfg.get("db_socket") != sock:
+    cfg["db_socket"] = sock
+    with open(path, "w") as fh:
+        json.dump(cfg, fh, indent=2)
+PYEOF
+      fi
+      MYSQL_SOCKET="$_sock"
+      export MYSQL_UNIX_PORT="$_sock"
+      log "Reusing external MariaDB at $_sock (retargeted db_socket)"
+      break
+    fi
+  done
 fi
 
 # Start dedicated Redis if port 6379 not already in use

@@ -318,6 +318,9 @@ jobs:
             CI_DB_PW="$(cat "$VB_PW_FILE")"
           else
             CI_DB_PW="vyci"
+            STOCK_SOCK="$(brew --prefix)/var/mysql/mysql.sock"
+            for _i in $(seq 1 30); do [ -S "$STOCK_SOCK" ] && break; sleep 1; done
+            [ -S "$STOCK_SOCK" ] || { echo "::error::Stock MariaDB socket not found at $STOCK_SOCK"; exit 1; }
             # Stock Homebrew MariaDB uses unix_socket auth for root@localhost.
             # `mariadb -u root` fails with ERROR 1698 because the runner OS
             # username is 'runner', not 'root'. Even `-h 127.0.0.1` fails
@@ -330,6 +333,21 @@ jobs:
               GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost'  IDENTIFIED BY '$CI_DB_PW' WITH GRANT OPTION;
               GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' IDENTIFIED BY '$CI_DB_PW' WITH GRANT OPTION;
               FLUSH PRIVILEGES;"
+            # vybench start launches stock mariadb first, so the managed
+            # socket at var/run/vybench-local/mysql.sock is never created.
+            # Point the bench at the stock socket (and store the password)
+            # so frappe does not try the missing path.
+            CFG="$(brew --prefix)/var/vybench-local/bench/sites/common_site_config.json"
+            python3 - "$CFG" "$STOCK_SOCK" "$CI_DB_PW" <<'PY'
+import json, sys
+path, sock, pw = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path) as fh:
+    cfg = json.load(fh)
+cfg["db_socket"] = sock
+cfg["root_password"] = pw
+with open(path, "w") as fh:
+    json.dump(cfg, fh, indent=2)
+PY
           fi
           vybench bench new-site ci.localhost --admin-password admin \
             --db-root-username root --db-root-password "$CI_DB_PW" --force

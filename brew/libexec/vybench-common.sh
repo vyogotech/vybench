@@ -55,8 +55,16 @@ export MYSQLCLIENT_CFLAGS="-I$MARIADB_PREFIX/include/mysql"
 export MYSQLCLIENT_LDFLAGS="-L$MARIADB_PREFIX/lib -lmariadb"
 export MYSQL_CONFIG="$MARIADB_PREFIX/bin/mariadb_config"
 
-# MariaDB socket — dedicated vybench socket
+# MariaDB socket — prefer the dedicated vybench socket when it exists; otherwise
+# fall back to the stock Homebrew MariaDB socket. `vybench start` launches
+# Homebrew's mariadb service first, so the supervisor often reuses that instance
+# and never creates $VYBENCH_RUN/mysql.sock. Pointing clients at a missing
+# socket makes frappe fail with OperationalError 2002.
+STOCK_MYSQL_SOCKET="$HOMEBREW_PREFIX/var/mysql/mysql.sock"
 MYSQL_SOCKET="$VYBENCH_RUN/mysql.sock"
+if [ ! -S "$MYSQL_SOCKET" ] && [ -S "$STOCK_MYSQL_SOCKET" ]; then
+  MYSQL_SOCKET="$STOCK_MYSQL_SOCKET"
+fi
 export MYSQL_UNIX_PORT="$MYSQL_SOCKET"
 
 # Git safe.directory — avoids "dubious ownership" errors
