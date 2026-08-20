@@ -2,7 +2,7 @@ DISTRO      ?= ubuntu:24.04
 FRAPPE_BRANCH ?= version-16
 FRAPPE_APPS ?= erpnext
 
-.PHONY: help payload deb rpm snap snap-postgres snap-remote brew brew-audit brew-test brew-local-test test drift-check validate-snap validate-snap-postgres
+.PHONY: help payload deb rpm snap snap-postgres snap-remote brew brew-audit brew-test brew-local-test brew-sha test drift-check validate-snap validate-snap-postgres
 help:
 	@echo "payload      - build the bench payload for DISTRO=$(DISTRO)"
 	@echo "deb          - build a .deb from the payload in dist/"
@@ -13,6 +13,7 @@ help:
 	@echo "brew         - install the Homebrew formula from source (macOS only)"
 	@echo "brew-audit   - run brew audit checks on the formula"
 	@echo "brew-test    - run brew test on the installed formula"
+	@echo "brew-sha     - pin brew/Formula/vybench.rb sha256 for TAG=vX.Y.Z (default: latest v*)"
 	@echo "test         - install the built package in a clean container and verify"
 	@echo "drift-check  - compare the vendored nginx template against upstream"
 	@echo "validate-snap - run pre-flight snap validation checks"
@@ -38,6 +39,11 @@ brew-audit:
 
 brew-test:
 	brew test vyogotech/tap/vybench
+
+# Pin url+sha256 in brew/Formula/vybench.rb for a release tag (Homebrew requires this).
+#   make brew-sha TAG=v16.0.0
+brew-sha:
+	./scripts/update-brew-sha256.sh $(TAG)
 
 # Rebuild the local-test tarball, update its SHA256 in the formula, and install.
 # Safe to re-run: brew reinstalls if already present.

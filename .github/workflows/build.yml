@@ -400,6 +400,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          # Need a full history so the follow-up push can fast-forward main.
+          fetch-depth: 0
+
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
@@ -416,6 +422,26 @@ jobs:
           ( cd dist && sha256sum ./*.deb ./*.snap > SHA256SUMS )
           cat dist/SHA256SUMS
           ls -lh dist
+
+      # Homebrew formulas must pin url+sha256. Compute the digest of this tag's
+      # GitHub archive and write it into brew/Formula/vybench.rb on main so a
+      # tap PR can copy a correct formula (brew install does not hash on the fly).
+      - name: Update Homebrew formula sha256 for this tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/update-brew-sha256.sh
+          ./scripts/update-brew-sha256.sh "$TAG"
+          if git diff --quiet -- brew/Formula/vybench.rb; then
+            echo "formula already up to date for $TAG"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add brew/Formula/vybench.rb
+          git commit -m "chore(brew): pin sha256 for ${TAG}"
+          git push origin HEAD:main
 
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
