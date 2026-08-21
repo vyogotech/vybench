@@ -19,7 +19,7 @@ class Vybench < Formula
   desc "Frappe Bench v16 & ERPNext v16 single-node server stack for macOS"
   homepage "https://github.com/vyogotech/vybench"
   url "https://github.com/vyogotech/vybench/archive/refs/tags/v16.0.0.tar.gz"
-  sha256 "e40870f71fadc0a6b66a5b3d34f00ebb4e084761f126f3b749a5b25ca29be306"
+  sha256 "9fd51b130187359c1d793857d868296968a9b1db87b63a4be0022e751ea77ca4"
   license "GPL-3.0-only"
   head "https://github.com/vyogotech/vybench.git", branch: "main"
 
