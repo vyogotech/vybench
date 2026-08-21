@@ -1,0 +1,39 @@
+name: Publish APT Repository
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish'
+        required: true
+        default: 'v16.0.0'
+  release:
+    types: [published]
+
+jobs:
+  publish-apt:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download release deb packages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p dist
+          gh release download "${{ inputs.tag || github.event.release.tag_name || 'v16.0.0' }}" \
+            --repo vyogotech/vybench \
+            --dir dist \
+            --pattern "*.deb"
+          ls -lh dist
+
+      - name: Build & Publish APT repository to Cloudflare R2
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq dpkg-dev
+          ./scripts/publish-apt-repo.sh dist
