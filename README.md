@@ -184,6 +184,15 @@ The test runner automatically verifies:
 
 ---
 
+## Documentation
+
+* [Architectural Comparison (Vybench vs. Host Scripts vs. Docker)](docs/comparison.md)
+* [Linux Snap Installation Guide](docs/snap-install.md)
+* [macOS Native Installation Guide](docs/native-install.md)
+* [Developer Cheatsheet](docs/developer-cheatsheet.md)
+
+---
+
 ## CI/CD Pipeline
 
 Continuous Integration is managed via `.github/workflows/ci.yml`:
