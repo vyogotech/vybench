@@ -444,6 +444,16 @@ jobs:
           git add brew/Formula/vybench.rb
           git commit -m "chore(brew): pin sha256 for ${TAG}"
           git push origin HEAD:main
+      - name: Build & Publish APT repository to Cloudflare R2
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq dpkg-dev awscli
+          ./scripts/publish-apt-repo.sh dist
 
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
@@ -458,11 +468,21 @@ jobs:
             | `vybench` | MariaDB (v16 stable) | `sudo snap install vybench` |
             | `vypgbench` | PostgreSQL (develop) | `sudo snap install vypgbench` |
 
-            ### Native packages (.deb)
+            ### Native APT Repository (Ubuntu & Debian)
 
-            The `.deb` builds are **distribution-specific** — each bundles a
-            CPython 3.14 compiled against that release's own OpenSSL and sqlite,
-            so they are not interchangeable:
+            ```bash
+            # 1. Add repository
+            echo "deb [trusted=yes] https://apt.vyogo.tech stable main" | sudo tee /etc/apt/sources.list.d/vybench.list
+
+            # 2. Update & Install
+            sudo apt update
+            sudo apt install vybench
+
+            # 3. Setup site
+            sudo vybench-setup --site dev.localhost --admin-password admin
+            ```
+
+            ### Standalone .deb Downloads
 
             | File | For |
             | :--- | :--- |
