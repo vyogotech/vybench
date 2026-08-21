@@ -321,7 +321,9 @@ jobs:
         run: |
           set -euo pipefail
           echo "Using ${{ matrix.file }} as snap/snapcraft.yaml"
-          cp "${{ matrix.file }}" snap/snapcraft.yaml
+          if [ "${{ matrix.file }}" != "snap/snapcraft.yaml" ]; then
+            cp "${{ matrix.file }}" snap/snapcraft.yaml
+          fi
           # Prove the staged name matches the matrix flavor before we burn a build.
           staged="$(awk '/^name:/{print $2; exit}' snap/snapcraft.yaml)"
           case "${{ matrix.flavor }}" in
