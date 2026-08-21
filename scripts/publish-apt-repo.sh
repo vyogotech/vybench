@@ -31,6 +31,21 @@ mkdir -p "$REPO_DIR/dists/stable/main/binary-arm64"
 # Copy deb files to pool
 cp "$DIST_DIR"/*.deb "$REPO_DIR/pool/main/v/vybench/"
 
+# Ensure both ~ and . naming conventions exist in pool
+for f in "$REPO_DIR/pool/main/v/vybench"/*.deb; do
+  [ -f "$f" ] || continue
+  alt="${f//.ubuntu/~ubuntu}"
+  alt="${alt//.debian/~debian}"
+  if [ "$alt" != "$f" ]; then
+    cp "$f" "$alt"
+  fi
+  alt2="${f//~ubuntu/.ubuntu}"
+  alt2="${alt2//~debian/.debian}"
+  if [ "$alt2" != "$f" ]; then
+    cp "$f" "$alt2"
+  fi
+done
+
 # Generate Packages & Packages.gz for amd64
 cd "$REPO_DIR"
 if command -v dpkg-scanpackages >/dev/null 2>&1; then
