@@ -142,6 +142,11 @@ if [ -n "${R2_ACCOUNT_ID:-}" ] && [ -n "${R2_ACCESS_KEY_ID:-}" ] && [ -n "${R2_S
   ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
   
   echo "=== Syncing APT repository to Cloudflare R2 ($BUCKET) ==="
+  if ! command -v aws >/dev/null 2>&1; then
+    echo "Installing AWS CLI via pip..."
+    pip install --break-system-packages --quiet awscli || pip install --quiet awscli || true
+  fi
+
   export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
   export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
   export AWS_DEFAULT_REGION="auto"

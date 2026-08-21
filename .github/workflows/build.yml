@@ -452,7 +452,7 @@ jobs:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq dpkg-dev awscli
+          sudo apt-get install -y -qq dpkg-dev
           ./scripts/publish-apt-repo.sh dist
 
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
