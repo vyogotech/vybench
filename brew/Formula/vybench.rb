@@ -208,7 +208,7 @@ class Vybench < Formula
       unless addons.empty?
         File.write("native-addons.list", "#{addons.join("\n")}\n")
         system "tar", "-czf", "native-addons.tar.gz", "-T", "native-addons.list"
-        rm addons, force: true
+        rm addons
         rm "native-addons.list"
       end
     end
