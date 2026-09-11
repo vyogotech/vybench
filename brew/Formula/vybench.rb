@@ -42,7 +42,6 @@ class Vybench < Formula
   #   brew install --cask wkhtmltopdf
   # See caveats below.
 
-
   # ── Build-time resources ──────────────────────────────────────────────────
   # frappe-bench CLI is needed only at build time to run `bench init`.
   # It is also installed into the venv so the runtime bench command works.
@@ -200,11 +199,9 @@ class Vybench < Formula
     # when assets are rebuilt. Pack them as well; post_install puts them back.
     cd bench_src do
       pwd = Pathname.pwd
-      addons = Dir.glob("apps/**/node_modules/**/*.{node,dylib}").select do |f|
-        File.file?(f) && !File.symlink?(f)
-      end.map do |f|
-        Pathname.new(File.realpath(f)).relative_path_from(pwd).to_s
-      end.uniq
+      addons = Dir.glob("apps/**/node_modules/**/*.{node,dylib}")
+      addons = addons.select { |f| File.file?(f) && !File.symlink?(f) }
+      addons = addons.map { |f| Pathname.new(File.realpath(f)).relative_path_from(pwd).to_s }.uniq
       unless addons.empty?
         File.write("native-addons.list", "#{addons.join("\n")}\n")
         system "tar", "-czf", "native-addons.tar.gz", "-T", "native-addons.list"
