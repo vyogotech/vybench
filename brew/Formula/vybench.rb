@@ -42,11 +42,6 @@ class Vybench < Formula
   #   brew install --cask wkhtmltopdf
   # See caveats below.
 
-  bottle do
-    root_url "https://github.com/vyogotech/homebrew-tap/releases/download/v16.0.0"
-    rebuild 1
-    sha256 cellar: :any, arm64_tahoe: "807c33ded1a08bf65b1d810074e2a17398939ef3feabf52e98bfbcf55fcee6af"
-  end
 
   # ── Build-time resources ──────────────────────────────────────────────────
   # frappe-bench CLI is needed only at build time to run `bench init`.
