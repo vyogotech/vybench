@@ -1,9 +1,12 @@
-# Vybench Snap — Installation
+# Vybench Snap — Installation & User Guide
 
-A self-contained Frappe v16 install for any Linux distribution with `snapd`
-(Fedora, Ubuntu, Debian, Arch, RHEL). Python 3.14, MariaDB 10.11, Redis 7,
-Node.js 24 and Nginx are bundled inside the snap — nothing is taken from the
-host, so there are no library or OpenSSL conflicts between distributions.
+A self-contained Frappe & ERPNext orchestration stack for any Linux distribution with `snapd`
+(Fedora, Ubuntu, Debian, Arch, RHEL). Python 3.14, MariaDB 11.8, Redis 7, Node.js 24, and
+Nginx are bundled directly inside the snap, with an interactive Terminal UI (`vybench.tui`),
+multi-bench management, and FPM app installation. The separate `vypgbench` snap is the same
+stack with PostgreSQL 16 in place of MariaDB.
+
+Nothing is taken from the host, ensuring zero library conflicts and zero host OS pollution.
 
 ---
 
@@ -28,30 +31,162 @@ external drive, connect the one interface that is not automatic:
 sudo snap connect vybench:removable-media
 ```
 
-The install starts MariaDB and Redis, generates a random database root
-password, and brings up the full application stack. No post-install step is
+The install starts MariaDB (PostgreSQL in `vypgbench`) and Redis, generates a random database root
+passwords, and brings up the full application stack. No post-install step is
 required to get a working server.
 
 ---
 
-## 2. Use `bench` instead of `vybench.bench`
+## 2. CLI Aliasing & Group Access
 
-The snap exposes its CLI as `vybench.bench`. Alias it to the name everyone
-expects:
+The snap exposes commands under the `vybench` namespace. Alias them for standard convenience:
 
 ```bash
 sudo snap alias vybench.bench bench
+sudo snap alias vybench.fpm fpm
+sudo snap alias vybench.tui vybench-tui
 ```
 
 Check with `snap aliases vybench`; undo with `sudo snap unalias bench`.
 
-> If a pip-installed `frappe-bench` is already present, `/usr/local/bin/bench`
-> usually wins over `/snap/bin/bench` in `PATH`. Run `which -a bench` to see
-> which one you are getting.
+### Granting Access (No `sudo` Required)
+
+The background services run as the unprivileged `snap_daemon` account rather than root.
+To run `bench` and `vybench` as your normal host user without `sudo`:
+
+```bash
+sudo usermod -aG snap_daemon $USER
+newgrp snap_daemon          # or log out and back in
+```
+
+This mirrors Docker's `usermod -aG docker $USER`. Membership grants read/write access
+to benches and database sockets.
 
 ---
 
-## 3. Choose an install mode
+## 3. Interactive Terminal UI (`vybench.tui`)
+
+Launch the full-screen terminal console:
+
+```bash
+sudo vybench.tui
+# Or: sudo vybench.bench   (with no arguments, in a terminal)
+```
+
+It needs `sudo` because benches, the registry and the `current-bench` symlink live in
+`/var/snap/vybench/common`, which belongs to root. Bench commands it runs still drop to
+`snap_daemon`, as `sudo vybench.bench` always does.
+
+The TUI provides 5 views:
+1. **[1] Overview**: Status of the snap's services from `snapctl`, with `[s]` start all,
+   `[x]` stop all and `[r]` restart all. Stop and restart leave MariaDB and Redis running.
+2. **[2] Sites**: The active bench's sites. `[n]` creates one on any bench, `[o]` opens it in a browser,
+   `[B]` backs it up, `[R]` restores a backup, and `[d]` drops it after you type its name. A site left
+   over from a failed install is detected and replaced when you create it again.
+3. **[3] Marketplace**: Packages from fpm.vyogo.tech with category filters, search (`[/]`),
+   an inspector, and `[i]` to install with the bundled `fpm`. `[t]` also installs onto a site.
+4. **[4] Logs**: Tails the active bench's `logs/*.log`. Service output goes to the journal:
+   `sudo snap logs -f vybench`.
+5. **[5] Benches**: `[Enter]` switches, `[n]` creates, `[a]` attaches, `[d]` removes from the registry.
+
+Global hotkeys: `[Tab]` cycles tabs, `[1]`-`[5]` jump to tabs, `[b]` opens Benches, `[q]` quits.
+
+---
+
+## 4. Multi-Bench Management
+
+Run these with `sudo`, for the reason above:
+
+```bash
+# List all registered benches (* marks the active bench)
+sudo vybench.bench bench list
+
+# Display the active bench
+sudo vybench.bench bench current
+
+# Switch the active bench, then restart the services so they serve it
+sudo vybench.bench bench switch <name>
+sudo snap restart vybench
+
+# Create a bench (the packaged Frappe release is linked in seconds)
+sudo vybench.bench bench new <name> [--version VER]
+
+# Register an existing bench, or remove one from the registry (files are kept)
+sudo vybench.bench bench attach <name> <path>
+sudo vybench.bench bench drop <name>
+```
+
+### Frappe Versions
+
+Without `--version`, a new bench links the Frappe release inside the snap and is ready at
+once. Any other version is built with `bench init`, which clones Frappe and installs its
+Python and Node dependencies. That needs network access, takes several minutes, and uses the
+bundled Python 3.14, which an older Frappe release may not support.
+
+```bash
+# Frappe 15, built with bench init --frappe-branch version-15
+sudo vybench.bench bench new erp-v15 --version 15
+
+# The develop branch
+sudo vybench.bench bench new erp-dev --version develop
+```
+
+`vybench` detects versions from `__init__.py`, the git branch, `common_site_config.json`,
+and Python metadata. Each bench has its own `bench_id`, which namespaces its Redis queues so
+jobs from different benches never mix.
+
+---
+
+## 5. Databases (MariaDB or PostgreSQL)
+
+The `vybench` snap runs **MariaDB 11.8**. The `vypgbench` snap is the same stack running
+**PostgreSQL 16** instead. The two are separate snaps; install the one whose database you want.
+
+### Creating Sites
+
+```bash
+# vybench snap: a MariaDB site
+bench new-site maria.localhost --db-type mariadb --admin-password admin
+
+# vypgbench snap: a PostgreSQL site
+vypgbench.bench new-site pg.localhost --db-type postgres --admin-password admin
+```
+
+### Direct Database Client Tools
+
+Each snap ships the client tools for its own database:
+
+```bash
+# MariaDB client
+vybench.mysql -u root -p -S /var/snap/vybench/common/run/mysql.sock
+
+# PostgreSQL client (vypgbench snap)
+vypgbench.psql -U postgres -h 127.0.0.1
+vypgbench.pg-dump -U postgres mydb > dump.sql
+vypgbench.pg-restore -U postgres -d mydb dump.sql
+```
+
+---
+
+## 6. Frappe Package Manager (FPM) Integration
+
+`vybench` bundles the Frappe Package Manager CLI and live TUI marketplace. FPM packages ship
+pre-compiled assets, eliminating the need for `yarn`, `node_modules`, or heavy `bench build` steps:
+
+```bash
+# Search and browse apps
+vybench.fpm search hrms
+
+# Install pre-compiled package into active bench
+vybench.fpm install frappe/hrms==15.63.3
+
+# Install app onto site
+bench --site dev.localhost install-app hrms
+```
+
+---
+
+## 7. Choose an Install Mode
 
 ```bash
 sudo snap set vybench mode=production   # default
@@ -60,69 +195,18 @@ sudo snap set vybench mode=developer
 
 |                         | production                            | developer                        |
 | ----------------------- | ------------------------------------- | -------------------------------- |
-| MariaDB, Redis          | running                               | running                          |
+| MariaDB (or PostgreSQL), Redis | running                        | running                          |
 | web, workers, scheduler, socketio | running as managed services | **off** — you run `bench serve`  |
 | `apps/`, `env/`         | read-only, shared from the snap       | real writable copy (~1.15 GB)    |
 | Upgrade with            | `snap refresh` (`snap revert` to roll back) | `bench update`, `bench switch-to-branch` |
 | Best for                | servers, demos, CI                    | app development                  |
 
-Switching to `developer` copies `apps/` and `env/` out of the read-only snap so
-the bench behaves like an ordinary `bench init` install — `get-app`, `new-app`,
-source edits, `pip install`, `build` and `watch` all work. It takes about a
-minute and roughly 1.15 GB. Switching back to `production` leaves that copy in
-place, so your work is never discarded.
+Switching to `developer` copies `apps/` and `env/` out of the read-only snap into the bench so
+`get-app`, `new-app`, source edits, `pip install`, `build` and `watch` all work.
 
 ---
 
-## 4. Create a site
-
-```bash
-cd /var/snap/vybench/common/bench
-bench new-site mysite.localhost --admin-password admin
-```
-
-No database password is needed: one is generated at first start and recorded in
-`sites/common_site_config.json`. Log in as `Administrator`.
-
-Reach the site at <http://127.0.0.1:8000> — send the site name as the `Host`
-header, or add it to `/etc/hosts`:
-
-```bash
-echo "127.0.0.1 mysite.localhost" | sudo tee -a /etc/hosts
-```
-
----
-
-## 5. Running `bench` as your own user
-
-**In developer mode this needs no setup.** The bench belongs to the user who
-creates it, so `bench` works directly.
-
-**In production mode the services own the bench**, because they run as the
-unprivileged `snap_daemon` account rather than as root. A plain user therefore
-cannot write to it. Two ways to work with that:
-
-```bash
-# Occasional use — run as the service account
-sudo bench --site mysite.localhost migrate
-```
-
-```bash
-# Regular use — grant yourself permanent access (the Docker post-install step)
-sudo usermod -aG snap_daemon $USER
-newgrp snap_daemon          # or log out and back in
-```
-
-This mirrors Docker's `usermod -aG docker $USER`, and carries the same caveat:
-membership grants full read/write access to every site's files and database
-directory. Grant it only to users who are entitled to that.
-
-`bench` detects this situation and prints these options rather than failing with
-a bare permission error.
-
----
-
-## 6. Optional services
+## 8. Optional Services & Configuration
 
 ```bash
 sudo snap set vybench nginx=true          # reverse proxy, production only
@@ -131,81 +215,33 @@ sudo snap set vybench watch=true          # asset rebuilder, developer only
 sudo snap set vybench bind=0.0.0.0        # expose the web port on the LAN
 ```
 
-Nginx is off by default: gunicorn already serves static assets correctly, and
-binding a port collides with any web server already on the host. It listens on
-8080 rather than 80 because the services run unprivileged and cannot bind ports
-below 1024.
-
 ---
 
-## 7. Everyday commands
+## 9. Everyday Service Commands
 
 ```bash
 snap services vybench                     # what is running
-sudo snap restart vybench.web
-sudo snap logs vybench.web -f
-sudo snap get vybench mode
-
-vybench.mysql -u root -p -S /var/snap/vybench/common/run/mysql.sock
-vybench.redis-cli ping
+sudo snap restart vybench.web             # restart web tier
+sudo snap restart vybench                 # restart all services
+sudo snap logs vybench.web -f             # follow live web logs
+sudo snap get vybench mode                # check current mode
 ```
 
-Data lives in `/var/snap/vybench/common`:
+### Data Storage & Paths
 
-| Path            | Contents                                  |
-| --------------- | ----------------------------------------- |
-| `bench/sites/`  | sites, site configs, uploaded files       |
-| `mariadb/`      | database files (private to the service)   |
-| `run/`          | MariaDB socket                            |
-| `bench/logs/`   | bench and worker logs                     |
+All runtime and persistent data lives in `/var/snap/vybench/common`:
+
+| Path | Contents |
+| :--- | :--- |
+| `benches/<name>/` | Bench root for bench `<name>` (`sites/`, `apps/`, `env/`) |
+| `current-bench` | Symlink pointing to the currently active bench |
+| `bench/` | Default single-bench root (fully backward compatible) |
+| `mariadb/` | MariaDB database storage directory |
+| `postgres/` | PostgreSQL 16 database storage directory |
+| `run/mysql.sock` | MariaDB UNIX domain socket |
+| `bench/logs/` | Frappe's own logs for the default bench (each bench has its own `logs/`) |
+| `benches.json` | Registry of benches, next to `current-bench` |
 
 `snap remove vybench` keeps this directory as a snapshot; use
 `snap remove --purge` to delete it. Back up sites with `bench backup` before
 removing anything.
-
----
-
-## 8. PostgreSQL variant — `vypgbench`
-
-`vypgbench` is the PostgreSQL build of the same stack, tracking Frappe and
-ERPNext `develop` rather than the stable v16 branch.
-
-```bash
-sudo snap install vypgbench
-```
-
-```bash
-# Optional alias
-sudo snap alias vypgbench.bench bench
-
-# Add yourself to the snap_daemon group
-sudo usermod -aG snap_daemon $USER && newgrp snap_daemon
-```
-
-Create a site — the PostgreSQL root password is generated at first start and
-recorded automatically in `common_site_config.json`:
-
-```bash
-cd /var/snap/vypgbench/common/bench
-vypgbench.bench new-site mysite.localhost --admin-password admin
-```
-
-Service and config commands mirror `vybench`, with the prefix swapped:
-
-```bash
-snap services vypgbench
-sudo snap set vypgbench mode=developer
-sudo snap set vypgbench nginx=true
-sudo snap logs vypgbench.web -f
-```
-
-Client tools:
-
-```bash
-vypgbench.psql -U postgres -h 127.0.0.1
-vypgbench.pg-dump -U postgres mydb > dump.sql
-vypgbench.pg-restore -U postgres -d mydb dump.sql
-```
-
-Data lives in `/var/snap/vypgbench/common/` with the same layout as `vybench`
-(`bench/sites/`, `postgres/`, `run/`, `bench/logs/`).

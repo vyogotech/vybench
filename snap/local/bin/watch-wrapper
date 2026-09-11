@@ -4,7 +4,9 @@ set -e
 . "$SNAP/bin/snap-common.sh"
 
 bootstrap_common
-cd "$SNAP_COMMON/bench"
+# The active bench, resolved by snap-common.sh (current-bench, else the legacy one).
+BENCH_DIR="$LIVE_BENCH"
+cd "$BENCH_DIR"
 
 # Developer-mode asset rebuilder (`bench watch`). Needs node/yarn on PATH.
 export PATH="$SNAP/bin:$PATH"

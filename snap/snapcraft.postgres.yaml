@@ -46,6 +46,12 @@ apps:
     command: bin/bench-wrapper
     plugs: [network, network-bind, home, removable-media]
 
+  # The interactive TUI, also what `bench` opens when run bare in a terminal.
+  # It runs bench and fpm on the user's behalf, so it needs bench's plugs.
+  tui:
+    command: bin/vybench-tui
+    plugs: [network, network-bind, home, removable-media]
+
   postgres:
     command: bin/postgres-wrapper
     daemon: simple
@@ -132,6 +138,21 @@ parts:
     override-build: |
       craftctl default
       chmod 755 $SNAPCRAFT_PART_INSTALL/bin/*
+
+  # ── Interactive TUI and multi-bench CLI ────────────────────────────────────
+  # bench-wrapper hands a bare `bench`, `bench tui`, and the multi-bench
+  # commands (list/current/switch/new/attach/drop) to this binary.
+  tui:
+    plugin: nil
+    source: tui
+    build-snaps: [go/1.25/stable]
+    build-environment:
+      - CGO_ENABLED: "0"
+    override-build: |
+      set -ex
+      go build -trimpath \
+        -ldflags "-s -w -X main.version=${SNAPCRAFT_PROJECT_VERSION:-${CRAFT_PROJECT_VERSION:-dev}}" \
+        -o "$SNAPCRAFT_PART_INSTALL/bin/vybench-tui" .
 
   # ── 1. System runtime packages ──────────────────────────────────────────────
   system-deps:

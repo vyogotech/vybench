@@ -26,12 +26,16 @@ class Vybench < Formula
   # ── Runtime dependencies ──────────────────────────────────────────────────
   # Datastores and runtimes managed by Homebrew; vybench only adds the
   # Frappe application layer on top of them.
+  depends_on "go" => :build
   depends_on :macos
   depends_on "mariadb"
   depends_on "node"
   depends_on "python@3.14"
   depends_on "redis"
   depends_on "yarn"
+  # PostgreSQL benches and sites need a server on 127.0.0.1:5432; it is not
+  # started for you: brew services start postgresql@16
+  depends_on "postgresql@16" => :optional
 
   # wkhtmltopdf with patched Qt is required for PDF generation.
   # The upstream Homebrew formula was removed; users must install via Cask:
@@ -50,6 +54,13 @@ class Vybench < Formula
   resource "frappe-bench" do
     url "https://files.pythonhosted.org/packages/59/bd/21a8d447f9c6b6df651753fee40899def1004987a348131112b1d7470390/frappe_bench-5.31.0.tar.gz"
     sha256 "bcc829befe2fb6c5145cd6f1ebb6d5a8b34bcf58de99cb8a6afc0e88430776c5"
+  end
+
+  # fpm installs prebuilt Frappe apps into a bench; the TUI's marketplace
+  # drives it. Same tag as the snap's fpm part.
+  resource "fpm" do
+    url "https://github.com/vyogotech/fpm/archive/refs/tags/v4.2.0.tar.gz"
+    sha256 "262f746fb52b9502dc76707f0394aad20cf6396e51685a03e1864bb96abad1d6"
   end
 
   def install
@@ -188,6 +199,25 @@ class Vybench < Formula
       rm_r "env"
     end
 
+    # Prebuilt Node add-ons in the apps' node_modules (lightningcss and the
+    # like) are linked the same way, and the fix phase fails on them too
+    # ("Updated load commands do not fit in the header"). They only matter
+    # when assets are rebuilt. Pack them as well; post_install puts them back.
+    cd bench_src do
+      pwd = Pathname.pwd
+      addons = Dir.glob("apps/**/node_modules/**/*.{node,dylib}").select do |f|
+        File.file?(f) && !File.symlink?(f)
+      end.map do |f|
+        Pathname.new(File.realpath(f)).relative_path_from(pwd).to_s
+      end.uniq
+      unless addons.empty?
+        File.write("native-addons.list", "#{addons.join("\n")}\n")
+        system "tar", "-czf", "native-addons.tar.gz", "-T", "native-addons.list"
+        rm addons, force: true
+        rm "native-addons.list"
+      end
+    end
+
     # ── Install libexec scripts ────────────────────────────────────────────
     libexec.install buildpath/"brew/libexec/vybench-common.sh"
     libexec.install buildpath/"brew/libexec/vybench-supervisor"
@@ -195,6 +225,23 @@ class Vybench < Formula
     chmod 0755, libexec/"vybench-supervisor"
     chmod 0755, libexec/"vybench-common.sh"
     chmod 0755, libexec/"vybench-mariadb-wrapper"
+
+    # ── Build the TUI and fpm ──────────────────────────────────────────────
+    # vybench-tui is the interactive TUI and the multi-bench CLI behind
+    # `vybench bench list|current|switch|new|attach|drop`. Release tarballs
+    # older than it have no tui/ directory and build without it.
+    if (buildpath/"tui/go.mod").exist?
+      cd "tui" do
+        system "go", "build", *std_go_args(ldflags: "-s -w -X main.version=#{version}", output: bin/"vybench-tui")
+      end
+    end
+
+    # fpm goes in libexec, not bin: the unrelated Ruby packaging tool is also
+    # called fpm. vybench-common.sh exports its path as VYBENCH_FPM.
+    resource("fpm").stage do
+      fpm_ldflags = "-s -w -X fpm/cmd.version=v#{resource("fpm").version}"
+      system "go", "build", *std_go_args(ldflags: fpm_ldflags, output: libexec/"bin/fpm"), "./cmd/fpm"
+    end
 
     # ── Install bin wrapper ────────────────────────────────────────────────
     bin.install buildpath/"brew/bin/vybench"
@@ -239,6 +286,14 @@ class Vybench < Formula
       end
     end
 
+    # Put back the Node add-ons hidden from the linkage fix phase
+    if (bench_src/"native-addons.tar.gz").exist?
+      cd bench_src do
+        system "tar", "-xzf", "native-addons.tar.gz"
+        rm "native-addons.tar.gz"
+      end
+    end
+
     # ── apps/ and env/ symlinks into libexec ──────────────────────────────
     %w[apps env].each do |tree|
       link = bench_root/tree
@@ -271,7 +326,6 @@ class Vybench < Formula
       VYBENCH_VAR:     (var/"vybench").to_s,
       VYBENCH_LOG:     (var/"log/vybench").to_s,
       VYBENCH_RUN:     (var/"run/vybench").to_s,
-      BENCH_ROOT:      (var/"vybench/bench").to_s,
       PATH:            "#{formula_opt_bin("python@3.14")}:#{formula_opt_bin("node")}:" \
                        "#{formula_opt_bin("mariadb")}:#{formula_opt_bin("redis")}:" \
                        "#{HOMEBREW_PREFIX}/bin:/usr/bin:/bin",
@@ -286,12 +340,13 @@ class Vybench < Formula
 
       ── QUICK START ────────────────────────────────────────────────────────
 
-      1. Start datastores (once; they auto-start at login):
-           brew services start mariadb
-           brew services start redis
+      1. Start vybench. It runs its own MariaDB (port 13306) and Redis
+         (port 16379), so Homebrew's mariadb and redis services are not
+         needed and can keep running for other projects:
+           vybench start
 
-      2. Start the Frappe application tier:
-           brew services start vybench
+      2. Or open the interactive TUI:
+           vybench tui
 
       3. Create your first site:
            vybench bench new-site mysite.localhost --admin-password admin
@@ -331,5 +386,10 @@ class Vybench < Formula
 
     # Verify python3 interpreter exists
     assert_predicate libexec/"frappe-bench/env/bin/python3", :executable?
+    # The TUI and fpm are only built from sources that include tui/
+    if (bin/"vybench-tui").exist?
+      assert_match "vybench-tui #{version}", shell_output("#{bin}/vybench-tui --version")
+      assert_predicate libexec/"bin/fpm", :executable?
+    end
   end
 end

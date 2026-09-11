@@ -4,7 +4,9 @@ set -e
 . "$SNAP/bin/snap-common.sh"
 
 bootstrap_common
-cd "$SNAP_COMMON/bench"
+# The active bench, resolved by snap-common.sh (current-bench, else the legacy one).
+BENCH_DIR="$LIVE_BENCH"
+cd "$BENCH_DIR"
 
 # `bench schedule` is the long-running scheduler process (the supervisor
 # frappe-schedule program). Note it is separate from per-site scheduler state:

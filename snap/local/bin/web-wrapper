@@ -13,10 +13,13 @@ PORT="$(site_conf webserver_port)"
 BIND="$(snapctl get bind 2>/dev/null || true)"
 [ -n "$BIND" ] || BIND=127.0.0.1
 
+# The active bench, resolved by snap-common.sh (current-bench, else the legacy one).
+BENCH_DIR="$LIVE_BENCH"
+
 if [ "$(get_mode)" = "developer" ]; then
   # Developer mode mirrors the Procfile's `web: bench serve`: werkzeug with the
   # auto-reloader, which also serves /assets and /files itself.
-  cd "$SNAP_COMMON/bench"
+  cd "$BENCH_DIR"
   run_as_daemon "$BENCH_PY" \
     "$BENCH_CLI" serve --port "$PORT"
 fi
@@ -34,4 +37,4 @@ run_as_daemon "$BENCH_PY" -m gunicorn \
   -b "$BIND:$PORT" \
   -w "$WORKERS" \
   'frappe.app:application_with_statics()' \
-  --chdir "$SNAP_COMMON/bench/sites"
+  --chdir "$BENCH_DIR/sites"

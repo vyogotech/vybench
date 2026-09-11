@@ -13,11 +13,16 @@ When setting up Frappe and ERPNext, developers and DevOps engineers often strugg
 | **Delivery Model** | Monolithic Bash script executing `apt-get`, `pip`, `npm` | Python CLI (`fm`) driving Docker Compose containers | Pre-packaged, strictly confined Snap (`core24`) & macOS Homebrew formula |
 | **Host OS Impact** | 🔴 **High Pollution** (Modifies `/etc`, global Python, Node, MariaDB, Redis, Nginx) | 🟡 **Moderate** (Requires Docker engine/daemon, creates Docker bridges, storage pools) | 🟢 **Zero Pollution** (Completely self-contained; squashfs image + `$SNAP_COMMON`) |
 | **OS & Distro Support** | 🔴 **Debian/Ubuntu Only** (Hardcoded version checks; rejects Fedora/Arch/macOS) | 🟢 **Cross-platform** (Wherever Docker Desktop / Engine runs) | 🟢 **Universal Linux & macOS** (Fedora, Arch, Ubuntu, Debian, RHEL, openSUSE, macOS) |
+| **Interactive TUI & Observability** | 🔴 **None** (Manual raw terminal logs) | 🟡 **Basic** (docker logs / compose ps) | 🟢 **Interactive Console TUI (`vybench tui`)** (Real-time service controls, site manager, log streaming, FPM marketplace) |
+| **Multi-Bench Orchestration** | 🔴 **Unsafe / Fragile** (Port collisions, manual directory juggling) | 🟡 **Resource-Heavy** (Multiple Docker Compose instances multiply container RAM) | 🟢 **Native Multi-Bench Engine** (`vybench bench switch`) with atomic switching, shared datastores, and `bench_id` Redis isolation |
+| **Frappe Version Support** | 🔴 **Hardcoded Single Version** | 🟡 **Image-bound** | 🟢 **Multiple benches, multiple versions** (the packaged release is linked instantly; v15, develop or any branch is built with `bench init`) |
+| **App Marketplace & Installation** | 🔴 **Slow Build** (`git clone` + `yarn` + `bench build`) | 🔴 **Slow Build** (`bench get-app` inside container) | 🟢 **FPM App Store** (1-click instant install; zero asset compilation) |
+| **Database Engines** | 🔴 **MariaDB Only** | 🟡 **Separate Container Swaps** | 🟢 **MariaDB or PostgreSQL per bench and site** (MariaDB 11.8 bundled; PostgreSQL 16 via the `vypgbench` snap or Homebrew's `postgresql@16`) |
 | **Performance & I/O** | 🟢 **Native** | 🔴 **Degraded on macOS/Windows** (Bind-mount latency for `node_modules` & `apps/`) | 🟢 **Native Linux / macOS Speed** (Zero VM layer, direct kernel execution) |
 | **Resource Overhead** | 🟢 Low (Runs native processes) | 🔴 **Heavy** (Docker daemon + VM on Mac/Win + multi-container RAM overhead) | 🟢 **Minimal** (Single unprivileged daemon set; no container runtime overhead) |
 | **Uninstallation & Cleanup** | 🔴 **Messy / Manual** (Scatters files in `/var`, `/etc`, `/home`, lingering daemons) | 🟡 **Docker Prunes Required** (Leaves images, dangling volumes, network interfaces) | 🟢 **Atomic Single-Command Purge** (`sudo snap remove --purge vybench`) |
 | **Security & Confinement** | 🔴 **None** (Runs as root/sudo, unconfined host access) | 🟡 **Container Isolation** (Docker daemon socket security considerations) | 🟢 **Strict Sandbox** (AppArmor, seccomp, non-root `snap_daemon` system user) |
-| **Developer Experience** | 🟡 Standard `bench` on host, but fragile to system upgrades | 🟡 Wrapped inside `fm` CLI / container subshells (`docker exec`) | 🟢 Direct native `bench` CLI (`bench new-site`, `bench get-app`, etc.) |
+| **Developer Experience** | 🟡 Standard `bench` on host, but fragile to system upgrades | 🟡 Wrapped inside `fm` CLI / container subshells (`docker exec`) | 🟢 Direct native `bench` CLI + TUI (`bench new-site`, `vybench bench`, etc.) |
 | **Dev ↔ Prod Switching** | 🔴 Manual reconfiguration of Supervisor / Nginx configs | 🟡 Docker Compose configuration swapping | 🟢 **Declarative 1-Command Toggle** (`snap set vybench mode=developer`) |
 
 ---
@@ -82,6 +87,20 @@ Testing a new site or app? When you're done, completely wipe all services, data,
 ```bash
 sudo snap remove --purge vybench
 ```
+
+#### 6. Interactive Terminal UI (`vybench tui`)
+Vybench includes an interactive console dashboard featuring real-time health monitors, live log streaming, 1-key site launching, integrated backup controls, and instant multi-bench switching.
+
+#### 7. Native Multi-Bench Orchestration
+Unlike Docker setups where spinning up multiple benches multiplies container count and memory consumption, Vybench shares background database daemons while isolating benches in `$VAR/benches/<name>`. Active bench switching is atomic (`vybench bench switch <name>`), and Redis queues are partitioned safely using `bench_id`.
+
+#### 8. Dynamic Frappe Versioning & Unified Dual Database
+Vybench does not force you into a single hardcoded version or database engine:
+* Run several Frappe versions side by side: the packaged release is linked into a new bench instantly, and `15`, `develop` or any branch is built with `bench init`. Each bench's version is detected from its tree.
+* Each bench and site selects **MariaDB 11.8** or **PostgreSQL 16**. MariaDB is bundled; PostgreSQL comes from the separate `vypgbench` snap on Linux or `postgresql@16` on macOS.
+
+#### 9. Instant FPM Marketplace (Zero Asset Build Step)
+Through native Frappe Package Manager (FPM) integration, apps install in seconds with pre-compiled frontend bundles. No `yarn`, no `node_modules`, and no lengthy `bench build` compile times required.
 
 ---
 

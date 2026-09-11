@@ -201,7 +201,28 @@ entitled to that.
 
 ---
 
-## 7. Upgrading
+## 7. Interactive TUI and multiple benches
+
+The `.deb` and `.rpm` packages do not include `vybench-tui` or the `vybench bench`
+multi-bench commands yet; those ship in the Homebrew formula and the snap. The systemd
+units here always serve `/opt/frappe-bench`, so switching benches would not reach the
+services either.
+
+To use the TUI on this bench, build it from a checkout of this repository (it needs Go)
+and run it as the `frappe` user:
+
+```bash
+make tui
+sudo -u frappe -H ./brew/bin/vybench-tui --bench-path /opt/frappe-bench
+```
+
+The Overview reads the systemd units above; starting and stopping them needs root. The
+Sites, Marketplace and Logs tabs work on `/opt/frappe-bench`, and the service logs are in
+the journal (`journalctl -u frappe-web -f`).
+
+---
+
+## 8. Upgrading
 
 Two separate things, and it matters which one you mean.
 
@@ -221,7 +242,7 @@ package-upgraded is in whichever state the package shipped.
 
 ---
 
-## 8. Removing
+## 9. Removing
 
 ```bash
 sudo apt remove vybench        # or: sudo dnf remove vybench
@@ -240,7 +261,7 @@ Take a backup first: `sudo -u frappe -H bench --site dev.localhost backup`.
 
 ---
 
-## 9. Building the packages yourself
+## 10. Building the packages yourself
 
 The bench is built inside a container of the target distribution, at
 `/opt/frappe-bench` — the exact path the package installs to. That is what makes

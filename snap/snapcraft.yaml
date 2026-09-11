@@ -69,6 +69,20 @@ apps:
     command: bin/bench-wrapper
     plugs: [network, network-bind, home, removable-media]
 
+  # The interactive TUI, also what `bench` opens when run bare in a terminal.
+  # It runs bench and fpm on the user's behalf, so it needs bench's plugs.
+  tui:
+    command: bin/vybench-tui
+    plugs: [network, network-bind, home, removable-media]
+
+  # fpm installs prebuilt Frappe app packages into the live bench: resolved,
+  # checksum-verified, with their Python dependencies vendored as wheels, so an app
+  # is added without compiling anything on the machine. It writes to the bench under
+  # $SNAP_COMMON, never to the read-only payload.
+  fpm:
+    command: bin/fpm-wrapper
+    plugs: [network, network-bind, home, removable-media]
+
   mariadb:
     command: bin/mariadb-wrapper
     daemon: simple
@@ -171,7 +185,35 @@ parts:
       craftctl default
       chmod 755 $SNAPCRAFT_PART_INSTALL/bin/*
 
+  # ── Interactive TUI and multi-bench CLI ────────────────────────────────────
+  # bench-wrapper hands a bare `bench`, `bench tui`, and the multi-bench
+  # commands (list/current/switch/new/attach/drop) to this binary.
+  tui:
+    plugin: nil
+    source: tui
+    build-snaps: [go/1.25/stable]
+    build-environment:
+      - CGO_ENABLED: "0"
+    override-build: |
+      set -ex
+      go build -trimpath \
+        -ldflags "-s -w -X main.version=${SNAPCRAFT_PROJECT_VERSION:-${CRAFT_PROJECT_VERSION:-dev}}" \
+        -o "$SNAPCRAFT_PART_INSTALL/bin/vybench-tui" .
+
   # ── 1. System runtime packages ──────────────────────────────────────────────
+  # Built from source rather than downloading a release binary: the snap is built for
+  # both amd64 and arm64, and a Go build for the target arch is simpler and more
+  # auditable than picking the right asset per platform.
+  fpm:
+    plugin: go
+    source: https://github.com/vyogotech/fpm.git
+    source-tag: v4.2.0
+    build-snaps: [go/1.25/stable]
+    build-environment:
+      - CGO_ENABLED: "0"
+    organize:
+      bin/fpm: usr/bin/fpm
+
   system-deps:
     plugin: nil
     stage-packages:

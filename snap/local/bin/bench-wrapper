@@ -3,6 +3,28 @@ set -e
 
 . "$SNAP/bin/snap-common.sh"
 
+# vybench-tui is the interactive TUI and the multi-bench CLI (tui part).
+TUI_BIN="$SNAP/bin/vybench-tui"
+if [ -x "$TUI_BIN" ]; then
+  # Bare in a terminal, or `tui`: the interactive TUI.
+  if [ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ]; then
+    exec "$TUI_BIN"
+  fi
+  if [ "${1:-}" = "tui" ]; then
+    shift
+    exec "$TUI_BIN" "$@"
+  fi
+  # Multi-bench commands, as `vybench.bench bench list` or `vybench.bench list`.
+  # These names never reach frappe's bench: its own `bench drop` deletes a
+  # bench directory.
+  if [ "${1:-}" = "bench" ]; then
+    case "${2:-}" in list|current|switch|new|attach|drop) shift ;; esac
+  fi
+  case "${1:-}" in
+    list|current|switch|new|attach|drop) exec "$TUI_BIN" bench "$@" ;;
+  esac
+fi
+
 # Show vybench help (trademark + quick reference) when invoked bare or with "help".
 if [ $# -eq 0 ] || [ "$1" = "help" ] || [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
   . "$SNAP/bin/show-help"
@@ -14,9 +36,10 @@ require_bench_access "$@" || exit 1
 
 bootstrap_common
 
-# If the current directory is not a bench, default to the common bench.
-if [ ! -f "Procfile" ] && [ ! -d "sites" ]; then
-  cd "$SNAP_COMMON/bench"
+# Outside a bench, run against the active one. `bench init` creates a new
+# bench at the path it is given, so it must not run from inside another.
+if [ "${1:-}" != "init" ] && [ ! -f "Procfile" ] && [ ! -d "sites" ]; then
+  cd "$LIVE_BENCH"
 fi
 
 # Normally this already runs as the invoking host user and run_as_daemon is a

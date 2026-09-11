@@ -54,9 +54,7 @@ show_help() {
 
   QUICK START
 
-    brew services start mariadb          # start database (once)
-    brew services start redis            # start cache (once)
-    brew services start vybench          # start Frappe services
+    vybench start                        # vybench, with its own MariaDB and Redis
     vybench bench new-site mysite.localhost --admin-password admin
     # → Open http://mysite.localhost:8000
 
@@ -76,6 +74,23 @@ show_help() {
     vybench set bind=0.0.0.0            expose web on LAN
     vybench get mode                     view current mode
 
+  INTERACTIVE TUI
+
+    vybench tui                          launch interactive TUI
+
+  MULTI-BENCH MANAGEMENT
+
+    vybench bench list                   list registered benches (* = active)
+    vybench bench current                show the active bench
+    vybench bench switch <name>          switch the active bench
+    vybench bench new <name> [--db mariadb|postgres] [--version VER]
+                                         create a bench (the packaged Frappe is
+                                         linked instantly; other versions run
+                                         bench init)
+    vybench bench attach <name> <path>   register an existing bench
+    vybench bench drop <name>            remove a bench from the registry
+                                         (files are kept)
+
   BENCH COMMANDS
 
     vybench bench new-site mysite.localhost --admin-password admin
@@ -92,9 +107,12 @@ show_help() {
   DATA & PATHS
 
     Sites & config   $(brew --prefix)/var/vybench/bench/sites/
+    Extra benches    $(brew --prefix)/var/vybench/benches/<name>/
     Database files   $(brew --prefix)/var/vybench/mariadb/
     Logs             $(brew --prefix)/var/log/vybench/
     MariaDB socket   $(brew --prefix)/var/run/vybench/mysql.sock
+    Ports            MariaDB 13306, Redis 16379, web 8000
+                     (Homebrew's own mariadb/redis on 3306/6379 are not used)
 
   MORE INFO
 
@@ -107,12 +125,53 @@ EOF
 # ---------------------------------------------------------------------------
 # dispatch
 # ---------------------------------------------------------------------------
-CMD="${1:-help}"
-shift || true
+# vybench-tui is the interactive TUI and the multi-bench CLI. It sits next to
+# this script both when installed and in a checkout that ran `make tui`, so
+# that copy wins: a checkout must not pick up an older installed build.
+TUI_BIN="$SCRIPT_DIR/vybench-tui"
+[ -x "$TUI_BIN" ] || TUI_BIN="$HOMEBREW_PREFIX/opt/$VYBENCH_NAME/bin/vybench-tui"
+[ -x "$TUI_BIN" ] || TUI_BIN="$HOMEBREW_PREFIX/bin/vybench-tui"
+# The TUI runs bench commands through this wrapper so they get the same
+# environment as a hand-typed one.
+VYBENCH_CLI="$SCRIPT_DIR/$(basename "$SOURCE")"
+export VYBENCH_CLI
+
+if [ -z "${1:-}" ]; then
+  if [ -t 0 ] && [ -t 1 ] && [ -x "$TUI_BIN" ]; then
+    CMD="tui"
+  else
+    CMD="help"
+  fi
+else
+  CMD="$1"
+  shift || true
+fi
 
 case "$CMD" in
-  # ── bench passthrough ──────────────────────────────────────────────────
+  # ── interactive TUI ────────────────────────────────────────────────────
+  tui)
+    bootstrap_common
+    if [ ! -x "$TUI_BIN" ]; then
+      echo "vybench: vybench-tui binary not found. Build it with 'make tui' or install via Homebrew." >&2
+      exit 1
+    fi
+    exec "$TUI_BIN" "$@"
+    ;;
+
+  # ── bench commands & passthrough ──────────────────────────────────────
   bench)
+    # Multi-bench commands belong to vybench-tui. These names never reach
+    # frappe's bench: its own `bench drop` deletes a bench directory.
+    case "${1:-}" in
+      list|current|switch|new|attach|drop)
+        if [ ! -x "$TUI_BIN" ]; then
+          echo "vybench: 'bench $1' needs vybench-tui, which is not installed. Build it with 'make tui'." >&2
+          exit 1
+        fi
+        exec "$TUI_BIN" bench "$@"
+        ;;
+    esac
+
     bootstrap_common
     if [ "$1" = "init" ]; then
       # If running `bench init`, inject --python $PYTHON automatically if omitted
@@ -127,25 +186,37 @@ case "$CMD" in
       # Not in a custom bench folder -> use default vybench managed bench
       cd "$BENCH_ROOT"
     fi
-    # For new-site: auto-inject the vybench-managed root credentials when the
-    # caller does not supply --db-root-username. This prevents frappe from
-    # falling back to getpass(), which raises EOFError in non-TTY / CI contexts
-    # because an empty --db-root-password "" is falsy in Python and does not
-    # suppress the getpass() call.
-    if [ "$1" = "new-site" ]; then
-      _vb_has_db_root=0
-      for _vb_arg in "$@"; do
-        [ "$_vb_arg" = "--db-root-username" ] && { _vb_has_db_root=1; break; }
-      done
-      if [ "$_vb_has_db_root" -eq 0 ]; then
+    # new-site, drop-site and restore need the MariaDB root login. Inject the
+    # vybench-managed credentials when the caller does not supply
+    # --db-root-username, so frappe never falls back to getpass(), which
+    # raises EOFError without a TTY (CI, the TUI): an empty
+    # --db-root-password "" is falsy in Python and does not suppress it.
+    # The subcommand may follow --site <name>, as in
+    # `bench --site x restore file.sql.gz`. PostgreSQL needs its own
+    # superuser, so --db-type postgres is left alone.
+    _vb_args=("$@")
+    _vb_at=0
+    [ "${_vb_args[0]:-}" = "--site" ] && _vb_at=2
+    case "${_vb_args[$_vb_at]:-}" in
+      new-site|drop-site|restore)
+        _vb_inject=1
+        _vb_prev=""
+        for _vb_arg in "$@"; do
+          case "$_vb_arg" in
+            --db-root-username|--db-root-username=*|--mariadb-root-username|--mariadb-root-username=*|--root-login|--db-type=postgres)
+              _vb_inject=0 ;;
+          esac
+          [ "$_vb_prev" = "--db-type" ] && [ "$_vb_arg" = "postgres" ] && _vb_inject=0
+          _vb_prev="$_vb_arg"
+        done
         _vb_pw_file="$VYBENCH_VAR/mariadb/root_password"
-        if [ -f "$_vb_pw_file" ]; then
+        if [ "$_vb_inject" -eq 1 ] && [ -f "$_vb_pw_file" ]; then
           _vb_root_pw="$(cat "$_vb_pw_file")"
-          shift  # drop "new-site" from $@
-          set -- "new-site" "--db-root-username" "root" "--db-root-password" "$_vb_root_pw" "$@"
+          _vb_next=$((_vb_at + 1))
+          set -- "${_vb_args[@]:0:$_vb_next}" --db-root-username root --db-root-password "$_vb_root_pw" "${_vb_args[@]:$_vb_next}"
         fi
-      fi
-    fi
+        ;;
+    esac
     exec "$BENCH_PY" "$BENCH_CLI" "$@"
     ;;
 
@@ -190,9 +261,9 @@ PYEOF
 
   # ── service control ────────────────────────────────────────────────────
   start)
-    echo "Starting vybench services ($VYBENCH_NAME, mariadb, redis)..."
-    brew services start mariadb 2>/dev/null || true
-    brew services start redis   2>/dev/null || true
+    # The vybench service starts its own MariaDB and Redis, on ports of their
+    # own; Homebrew's mariadb and redis services are neither needed nor touched.
+    echo "Starting $VYBENCH_NAME (MariaDB on port $VYBENCH_DB_PORT, Redis on port $VYBENCH_REDIS_PORT)..."
     brew services start "$VYBENCH_NAME"
     ;;
 
@@ -205,8 +276,11 @@ PYEOF
     ;;
 
   status)
-    brew services list | grep -E "^(vybench|mariadb|redis)" || \
-      echo "No vybench-related services found in brew services."
+    brew services list | grep -E "^$VYBENCH_NAME " || echo "$VYBENCH_NAME is not a registered brew service."
+    if _vb_socket_live "$MYSQL_SOCKET"; then _vb_db=running; else _vb_db=stopped; fi
+    if nc -z 127.0.0.1 "$VYBENCH_REDIS_PORT" 2>/dev/null; then _vb_redis=running; else _vb_redis=stopped; fi
+    echo "MariaDB (vybench, port $VYBENCH_DB_PORT): $_vb_db"
+    echo "Redis   (vybench, port $VYBENCH_REDIS_PORT): $_vb_redis"
     ;;
 
   # ── logs ───────────────────────────────────────────────────────────────
@@ -233,7 +307,7 @@ PYEOF
     ;;
 
   redis-cli)
-    exec redis-cli "$@"
+    exec redis-cli -p "$VYBENCH_REDIS_PORT" "$@"
     ;;
 
   # ── help ───────────────────────────────────────────────────────────────

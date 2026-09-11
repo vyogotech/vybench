@@ -25,6 +25,13 @@ cat <<'EOF'
     echo "127.0.0.1 mysite.localhost" | sudo tee -a /etc/hosts
     # → Open http://mysite.localhost:8000
 
+  TUI & BENCHES
+
+    sudo vybench.tui                        # full-screen terminal UI
+    sudo vybench.bench bench list           # benches (* = active)
+    sudo vybench.bench bench new <name>     # new bench on the packaged Frappe
+    sudo vybench.bench bench switch <name>  # then: sudo snap restart vybench
+
   SERVICES
 
     snap services vybench                   # list all services

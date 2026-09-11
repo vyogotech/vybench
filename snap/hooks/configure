@@ -10,6 +10,9 @@ set -e
 
 SNAP_NAME="${SNAP_INSTANCE_NAME:-vybench}"
 
+# Resolves LIVE_BENCH, the active bench, which the mode change applies to.
+. "$SNAP/bin/snap-common.sh"
+
 if [ -f "$SNAP/bin/postgres-wrapper" ]; then
   DB_SVC="postgres"
 else
@@ -47,7 +50,6 @@ if [ "$MODE" = "developer" ]; then
   # Turn the install into an ordinary writable bench, so `bench update`,
   # `switch-to-branch`, `get-app`, `new-app`, `pip install` and `build` all work
   # the way they do on a normal Frappe install. ~1GB, once.
-  . "$SNAP/bin/snap-common.sh"
   bootstrap_common
   materialise_bench
 else
@@ -56,7 +58,7 @@ fi
 
 # developer_mode drives frappe itself: no asset caching, verbose errors, hooks
 # reloaded per request. Only writable once the bench has been bootstrapped.
-CFG="$SNAP_COMMON/bench/sites/common_site_config.json"
+CFG="$LIVE_BENCH/sites/common_site_config.json"
 if [ -f "$CFG" ]; then
   if [ "$MODE" = "developer" ]; then DEV=1; else DEV=0; fi
   as_daemon "$SNAP/opt/frappe-bench/env/bin/python3.14" - "$CFG" "$DEV" <<'PYEOF' || true

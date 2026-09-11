@@ -10,3 +10,6 @@ stage/
 # and the compiled CPython keyed by version+distro+arch.
 .build-cache/
 .build-cache-python/
+
+# Built by `make tui` (host-arch binary; the formula and snap build their own).
+brew/bin/vybench-tui

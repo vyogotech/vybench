@@ -1,9 +1,12 @@
 DISTRO      ?= ubuntu:24.04
 FRAPPE_BRANCH ?= version-16
 FRAPPE_APPS ?= erpnext
+VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
-.PHONY: help payload deb rpm snap snap-postgres snap-remote brew brew-audit brew-test brew-local-test brew-sha test drift-check validate-snap validate-snap-postgres
+.PHONY: help payload deb rpm snap snap-postgres snap-remote brew brew-audit brew-test brew-local-test brew-sha test drift-check validate-snap validate-snap-postgres tui tui-test
 help:
+	@echo "tui          - build the TUI / multi-bench CLI into brew/bin/vybench-tui"
+	@echo "tui-test     - vet and test the TUI (race detector on)"
 	@echo "payload      - build the bench payload for DISTRO=$(DISTRO)"
 	@echo "deb          - build a .deb from the payload in dist/"
 	@echo "rpm          - build an .rpm from the payload in dist/"
@@ -18,6 +21,14 @@ help:
 	@echo "drift-check  - compare the vendored nginx template against upstream"
 	@echo "validate-snap - run pre-flight snap validation checks"
 	@echo "validate-snap-postgres - run pre-flight snap validation checks for postgres snap"
+
+# brew/bin/vybench finds the binary next to itself, so a checkout works
+# without installing anything. The output is gitignored.
+tui:
+	cd tui && go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o ../brew/bin/vybench-tui .
+
+tui-test:
+	cd tui && go vet ./... && go test -race ./...
 
 payload:
 	./scripts/build-bench-payload.sh --distro "$(DISTRO)" \

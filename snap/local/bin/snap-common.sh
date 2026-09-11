@@ -24,12 +24,36 @@ SNAP_STABLE="/snap/$SNAP_NAME/current"
 # into $SNAP_COMMON (see materialise_bench) so that get-app / new-app / source
 # edits / pip install / bench build all work like a normal bench. Detect which
 # layout is in play rather than assuming, so both modes use one code path.
-if [ -d "$SNAP_COMMON/bench/env" ] && [ ! -L "$SNAP_COMMON/bench/env" ]; then
-  BENCH_ROOT="$SNAP_COMMON/bench"          # materialised, writable
+#
+# LIVE_BENCH is the writable bench everything here operates on. It is resolved
+# in the same order as the Homebrew wrapper and the Go CLI (BC-1):
+# 1. VYBENCH_BENCH (or BENCH_ROOT): explicit override, e.g. from the TUI
+# 2. the current directory, when it is a bench (sites/ and apps/)
+# 3. the current-bench symlink (the multi-bench active bench)
+# 4. $SNAP_COMMON/bench (the single bench of a pre-multi-bench install)
+if [ -n "${VYBENCH_BENCH:-}" ]; then
+  LIVE_BENCH="$VYBENCH_BENCH"
+elif [ -n "${BENCH_ROOT:-}" ] && [ "$BENCH_ROOT" != "$SNAP/opt/frappe-bench" ]; then
+  LIVE_BENCH="$BENCH_ROOT"
+elif [ -d ./sites ] && [ -d ./apps ]; then
+  LIVE_BENCH="$(pwd -P)"
+elif [ -L "$SNAP_COMMON/current-bench" ]; then
+  LIVE_BENCH="$(readlink -f "$SNAP_COMMON/current-bench")"
 else
-  BENCH_ROOT="$SNAP/opt/frappe-bench"      # squashfs, read-only
+  LIVE_BENCH="$SNAP_COMMON/bench"
+fi
+export LIVE_BENCH
+
+# A bench whose env/ is a real directory (materialised, or built by
+# `bench init` for another Frappe release) runs its own interpreter; one that
+# still links the squashfs, or has not been bootstrapped yet, runs the payload's.
+if [ -d "$LIVE_BENCH/env" ] && [ ! -L "$LIVE_BENCH/env" ]; then
+  BENCH_ROOT="$LIVE_BENCH"                # materialised, writable
+else
+  BENCH_ROOT="$SNAP/opt/frappe-bench"     # squashfs, read-only
 fi
 BENCH_PY="$BENCH_ROOT/env/bin/python3.14"
+[ -x "$BENCH_PY" ] || BENCH_PY="$BENCH_ROOT/env/bin/python3"
 export BENCH_CLI="$BENCH_ROOT/env/bin/bench"
 
 export PATH="$SNAP/usr/sbin:$SNAP/usr/bin:$SNAP/sbin:$SNAP/bin:$SNAP/usr/lib/postgresql/16/bin:$SNAP/usr/lib/postgresql/15/bin:$BENCH_ROOT/env/bin:$PATH"
@@ -52,7 +76,7 @@ export PGSHAREDIR="$SNAP/usr/share/postgresql/16"
 # redis_cache 13000) and frappe_user=frappe. frappe's node code resolves that
 # file relative to __dirname, so socketio would read the build-time config and
 # dial redis on 11000. Point every process at the live writable bench instead.
-export FRAPPE_BENCH_ROOT="$SNAP_COMMON/bench"
+export FRAPPE_BENCH_ROOT="$LIVE_BENCH"
 
 # Git refuses to touch a repository owned by a different UID ("detected dubious
 # ownership"). The bench tree is owned by snap_daemon and shared with the
@@ -102,7 +126,7 @@ bootstrap_datastores() {
   chmod 0755 "$SNAP_COMMON/run" 2>/dev/null || true
 }
 
-# Create the writable runtime layout and hand it to snap_daemon.
+# Create the writable runtime layout of $LIVE_BENCH and hand it to snap_daemon.
 bootstrap_common() {
   bootstrap_datastores
   # bench's is_bench_directory() requires ALL of paths_in_bench to exist:
@@ -110,17 +134,17 @@ bootstrap_common() {
   # Miss any one -- config/pids is the easy one to forget -- and bench decides it
   # is not in a bench, silently skips loading frappe's subcommands, and
   # `bench worker` dies with "No such command 'worker'".
-  mkdir -p "$SNAP_COMMON/bench/logs" "$SNAP_COMMON/bench/config/pids" \
-           "$SNAP_COMMON/bench/sites" 2>/dev/null || true
+  mkdir -p "$LIVE_BENCH/logs" "$LIVE_BENCH/config/pids" \
+           "$LIVE_BENCH/sites" 2>/dev/null || true
 
   # Link apps/ and env/ at the squashfs -- but ONLY while they are still links.
   # Once materialise_bench has replaced them with real directories, `ln -sf` would
   # create the link *inside* the directory (bench/env/env -> ...), quietly
   # corrupting a developer bench every time a service restarts.
   for tree in env apps; do
-    if [ ! -e "$SNAP_COMMON/bench/$tree" ] || [ -L "$SNAP_COMMON/bench/$tree" ]; then
+    if [ ! -e "$LIVE_BENCH/$tree" ] || [ -L "$LIVE_BENCH/$tree" ]; then
       as_daemon ln -sfn "$SNAP_STABLE/opt/frappe-bench/$tree" \
-              "$SNAP_COMMON/bench/$tree" 2>/dev/null || true
+              "$LIVE_BENCH/$tree" 2>/dev/null || true
     fi
   done
 
@@ -130,27 +154,27 @@ bootstrap_common() {
   # subcommands are never loaded. assets/ is symlinked rather than copied: it is
   # large, read-only, and version-locked to this squashfs revision.
   for seed in apps.txt apps.json; do
-    if [ ! -f "$SNAP_COMMON/bench/sites/$seed" ] && \
+    if [ ! -f "$LIVE_BENCH/sites/$seed" ] && \
        [ -f "$SNAP/opt/frappe-bench/sites/$seed" ]; then
-      as_daemon cp "$SNAP/opt/frappe-bench/sites/$seed" "$SNAP_COMMON/bench/sites/$seed" 2>/dev/null || true
+      as_daemon cp "$SNAP/opt/frappe-bench/sites/$seed" "$LIVE_BENCH/sites/$seed" 2>/dev/null || true
     fi
   done
   # Same guard as apps/env: leave a materialised (real) assets tree alone.
-  if [ ! -e "$SNAP_COMMON/bench/sites/assets" ] || [ -L "$SNAP_COMMON/bench/sites/assets" ]; then
+  if [ ! -e "$LIVE_BENCH/sites/assets" ] || [ -L "$LIVE_BENCH/sites/assets" ]; then
     as_daemon ln -sfn "$SNAP_STABLE/opt/frappe-bench/sites/assets" \
-            "$SNAP_COMMON/bench/sites/assets" 2>/dev/null || true
+            "$LIVE_BENCH/sites/assets" 2>/dev/null || true
   fi
 
   # Seed from the static config shipped in the snap rather than generating JSON
   # here. The same file is baked over the bench's build-time config, so both
   # copies agree by construction.
-  if [ ! -f "$SNAP_COMMON/bench/sites/common_site_config.json" ]; then
+  if [ ! -f "$LIVE_BENCH/sites/common_site_config.json" ]; then
     as_daemon cp "$SNAP/config/common_site_config.json" \
-       "$SNAP_COMMON/bench/sites/common_site_config.json" 2>/dev/null || true
+       "$LIVE_BENCH/sites/common_site_config.json" 2>/dev/null || true
     
     # Ensure db_type is postgres in common_site_config.json when running under postgres snap
     if [ -f "$SNAP/bin/postgres-wrapper" ]; then
-      as_daemon "$SNAP/opt/frappe-bench/env/bin/python3.14" - "$SNAP_COMMON/bench/sites/common_site_config.json" <<'PYEOF' || true
+      as_daemon "$SNAP/opt/frappe-bench/env/bin/python3.14" - "$LIVE_BENCH/sites/common_site_config.json" <<'PYEOF' || true
 import json, sys
 path = sys.argv[1]
 with open(path) as fh:
@@ -169,15 +193,15 @@ PYEOF
   # Deliberately scoped: apps/ and env/ are excluded because on a materialised
   # developer bench they are ~1GB and recursing them on every one of six daemon
   # starts is seconds of pointless I/O. materialise_bench fixes their modes once.
-  local shared="$SNAP_COMMON/bench/sites $SNAP_COMMON/bench/config \
-                $SNAP_COMMON/bench/logs"
+  local shared="$LIVE_BENCH/sites $LIVE_BENCH/config \
+                $LIVE_BENCH/logs"
 
   # Only claim the bench for snap_daemon when the managed app tier actually owns
   # it -- i.e. production. In developer mode those daemons are disabled and never
   # touch this tree, so leaving it owned by whoever ran `bench` means the
   # developer needs neither a group nor sudo, and git sees a repo it owns.
   if [ "$(id -u)" = "0" ] && [ "$(get_mode)" = "production" ]; then
-    chown "$DAEMON_USER:$DAEMON_USER" "$SNAP_COMMON/bench" 2>/dev/null || true
+    chown "$DAEMON_USER:$DAEMON_USER" "$LIVE_BENCH" 2>/dev/null || true
     # shellcheck disable=SC2086
     chown -R "$DAEMON_USER:$DAEMON_USER" $shared 2>/dev/null || true
   fi
@@ -186,7 +210,7 @@ PYEOF
   # gets nothing. g+s on directories makes new files inherit the group, so files
   # created by the CLI user stay writable by the daemons and vice versa -- without
   # it the sharing silently decays as soon as either side writes something new.
-  chmod u+rwx,g+rwxs,o-rwx "$SNAP_COMMON/bench" 2>/dev/null || true
+  chmod u+rwx,g+rwxs,o-rwx "$LIVE_BENCH" 2>/dev/null || true
   # shellcheck disable=SC2086
   chmod -R ug+rwX,o-rwx $shared 2>/dev/null || true
   # shellcheck disable=SC2086
@@ -215,7 +239,7 @@ as_daemon() {
 # Production deliberately does NOT do this: symlinks into the squashfs keep the
 # install immutable and let `snap refresh` / `snap revert` be the upgrade path.
 materialise_bench() {
-  local B="$SNAP_COMMON/bench"
+  local B="${1:-$LIVE_BENCH}"
   local SRC="$SNAP/opt/frappe-bench"
 
   for tree in apps env; do
@@ -325,12 +349,12 @@ except Exception:
 require_bench_access() {
   [ "$(id -u)" = "0" ] && return 0
 
-  local probe="$SNAP_COMMON/bench/sites"
+  local probe="$LIVE_BENCH/sites"
   [ -d "$probe" ] || return 0            # nothing bootstrapped yet; nothing to check
   [ -w "$probe" ] && return 0            # already writable -- say nothing
 
   cat >&2 <<EOF
-$SNAP_NAME: the bench at $SNAP_COMMON/bench is owned by '$DAEMON_USER' and is not
+$SNAP_NAME: the bench at $LIVE_BENCH is owned by '$DAEMON_USER' and is not
 writable by $(id -un).
 
 This install is in production mode, where the services own the bench. Either:
@@ -406,7 +430,8 @@ get_mode() {
 site_conf() {
   "$BENCH_PY" - "$1" <<'PYEOF' 2>/dev/null || true
 import json, os, sys
-path = os.path.join(os.environ["SNAP_COMMON"], "bench", "sites", "common_site_config.json")
+bench = os.environ.get("LIVE_BENCH") or os.path.join(os.environ["SNAP_COMMON"], "bench")
+path = os.path.join(bench, "sites", "common_site_config.json")
 try:
     with open(path) as fh:
         print(json.load(fh).get(sys.argv[1], "") or "")

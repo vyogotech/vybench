@@ -18,9 +18,12 @@ if [ -z "$HOMEBREW_PREFIX" ]; then
   fi
 fi
 
-# Auto-detect vybench instance name from LIBEXEC_DIR
+# Auto-detect vybench instance name from LIBEXEC_DIR. Run from a checkout,
+# use whichever formula is installed (vybench when both are).
 if [ -z "$VYBENCH_NAME" ]; then
   if [[ "$LIBEXEC_DIR" == *"vybench-local"* ]]; then
+    VYBENCH_NAME="vybench-local"
+  elif [ ! -d "$HOMEBREW_PREFIX/opt/vybench" ] && [ -d "$HOMEBREW_PREFIX/opt/vybench-local" ]; then
     VYBENCH_NAME="vybench-local"
   else
     VYBENCH_NAME="vybench"
@@ -33,8 +36,39 @@ VYBENCH_VAR="${VYBENCH_VAR:-$HOMEBREW_PREFIX/var/$VYBENCH_NAME}"
 VYBENCH_LOG="${VYBENCH_LOG:-$HOMEBREW_PREFIX/var/log/$VYBENCH_NAME}"
 VYBENCH_RUN="${VYBENCH_RUN:-$HOMEBREW_PREFIX/var/run/$VYBENCH_NAME}"
 
+# vybench runs its own MariaDB and Redis on ports of their own, so Homebrew's
+# mariadb and redis services (3306, 6379) can run alongside untouched.
+VYBENCH_DB_PORT="${VYBENCH_DB_PORT:-13306}"
+VYBENCH_REDIS_PORT="${VYBENCH_REDIS_PORT:-16379}"
+
+# vybench-tui and the multi-bench CLI read these, so a vybench-local install
+# (or a custom prefix) resolves the same directories as this script.
+export HOMEBREW_PREFIX VYBENCH_NAME VYBENCH_LIBEXEC VYBENCH_ETC VYBENCH_VAR VYBENCH_LOG VYBENCH_RUN
+export VYBENCH_DB_PORT VYBENCH_REDIS_PORT
+# fpm lives in libexec, not bin: the unrelated Ruby packaging tool is also
+# called fpm and may be first on PATH.
+export VYBENCH_FPM="${VYBENCH_FPM:-$VYBENCH_LIBEXEC/bin/fpm}"
+
 # Where the live bench lives (writable, under var/)
-BENCH_ROOT="${BENCH_ROOT:-$VYBENCH_VAR/bench}"
+# 4-step precedence (BC-1), shared with the Go CLI and the snap:
+# 1. Explicit VYBENCH_BENCH or BENCH_ROOT env override
+# 2. the current directory, when it is a bench (sites/ and apps/)
+# 3. current-bench symlink (multi-bench active bench)
+# 4. Legacy fallback ($VYBENCH_VAR/bench)
+if [ -n "${VYBENCH_BENCH:-}" ]; then
+  BENCH_ROOT="$VYBENCH_BENCH"
+elif [ -n "${BENCH_ROOT:-}" ]; then
+  : # explicit override, preserve it
+elif [ -d "./sites" ] && [ -d "./apps" ]; then
+  BENCH_ROOT="$(pwd)"
+elif [ -L "$VYBENCH_VAR/current-bench" ]; then
+  BENCH_ROOT="$(readlink -f "$VYBENCH_VAR/current-bench")"
+else
+  BENCH_ROOT="$VYBENCH_VAR/bench"
+fi
+
+export BENCH_ROOT
+export FRAPPE_BENCH_ROOT="$BENCH_ROOT"
 BENCH_PY="$BENCH_ROOT/env/bin/python3"
 [ -x "$BENCH_PY" ] || BENCH_PY="$BENCH_ROOT/env/bin/python"
 export BENCH_CLI="$BENCH_ROOT/env/bin/bench"
@@ -55,21 +89,24 @@ export MYSQLCLIENT_CFLAGS="-I$MARIADB_PREFIX/include/mysql"
 export MYSQLCLIENT_LDFLAGS="-L$MARIADB_PREFIX/lib -lmariadb"
 export MYSQL_CONFIG="$MARIADB_PREFIX/bin/mariadb_config"
 
-# MariaDB socket — prefer the dedicated vybench socket when it exists; otherwise
-# fall back to the stock Homebrew MariaDB socket. `vybench start` launches
-# Homebrew's mariadb service first, so the supervisor often reuses that instance
-# and never creates $VYBENCH_RUN/mysql.sock. Pointing clients at a missing
-# socket makes frappe fail with OperationalError 2002.
-# Homebrew MariaDB's compiled-in default is typically /tmp/mysql.sock
-# (see `mariadb_config --socket`), not var/mysql/mysql.sock.
-STOCK_MYSQL_SOCKET="$(mariadb_config --socket 2>/dev/null || true)"
-[ -n "$STOCK_MYSQL_SOCKET" ] || STOCK_MYSQL_SOCKET="/tmp/mysql.sock"
+# MariaDB socket: vybench's own server (vybench-mariadb-wrapper), which the
+# supervisor starts. Clients never fall back to another server that happens
+# to answer: Homebrew's mariadb service has other data and other credentials.
 MYSQL_SOCKET="$VYBENCH_RUN/mysql.sock"
-if [ ! -S "$MYSQL_SOCKET" ] && [ -S "$STOCK_MYSQL_SOCKET" ]; then
-  MYSQL_SOCKET="$STOCK_MYSQL_SOCKET"
-elif [ ! -S "$MYSQL_SOCKET" ] && [ -S "$HOMEBREW_PREFIX/var/mysql/mysql.sock" ]; then
-  MYSQL_SOCKET="$HOMEBREW_PREFIX/var/mysql/mysql.sock"
-fi
+
+# _vb_socket_live reports whether a Unix socket accepts connections. A socket
+# file outlives a server that crashed or was stopped. Costs ~50 ms.
+_vb_socket_live() {
+  [ -S "$1" ] || return 1
+  [ -x "$PYTHON" ] || return 0  # cannot probe: trust the file
+  "$PYTHON" -S -c 'import socket, sys
+s = socket.socket(socket.AF_UNIX)
+s.settimeout(0.5)
+try:
+    s.connect(sys.argv[1])
+except OSError:
+    sys.exit(1)' "$1" 2>/dev/null
+}
 export MYSQL_UNIX_PORT="$MYSQL_SOCKET"
 
 # Git safe.directory — avoids "dubious ownership" errors
@@ -128,6 +165,56 @@ bootstrap_common() {
     cp "$VYBENCH_ETC/common_site_config.json" \
        "$BENCH_ROOT/sites/common_site_config.json" 2>/dev/null || true
   fi
+}
+
+# ---------------------------------------------------------------------------
+# migrate_all_ports — benches set up while vybench shared Homebrew's ports
+# point frappe at 3306 (MariaDB) and 6379 (Redis). Move every bench's
+# common_site_config.json, every site's site_config.json, and the template new
+# benches are seeded from, to the ports vybench's own servers listen on. Only
+# values equal to the old defaults change; anything customised is left alone.
+# frappe re-reads these files on every request, so this must run only when the
+# servers have moved too: the supervisor calls it after starting them.
+# ---------------------------------------------------------------------------
+migrate_all_ports() {
+  [ -x "$PYTHON" ] || return 0
+  "$PYTHON" - "$VYBENCH_VAR" "$VYBENCH_ETC" "$VYBENCH_RUN/mysql.sock" \
+      "$VYBENCH_DB_PORT" "$VYBENCH_REDIS_PORT" <<'PYEOF' || true
+import glob, json, os, sys
+var, etc, sock, db_port, redis_port = sys.argv[1:6]
+benches = {os.path.join(var, "bench")} | set(glob.glob(os.path.join(var, "benches", "*")))
+try:
+    with open(os.path.join(var, "benches.json")) as fh:
+        benches |= {b["path"] for b in json.load(fh).get("benches", {}).values() if b.get("path")}
+except (OSError, ValueError):
+    pass
+files = [os.path.join(etc, "common_site_config.json")]
+for bench in sorted(benches):
+    files.append(os.path.join(bench, "sites", "common_site_config.json"))
+    files += sorted(glob.glob(os.path.join(bench, "sites", "*", "site_config.json")))
+old_redis, new_redis = "redis://127.0.0.1:6379", "redis://127.0.0.1:" + redis_port
+for path in files:
+    try:
+        with open(path) as fh:
+            cfg = json.load(fh)
+    except (OSError, ValueError):
+        continue
+    changed = False
+    for key in ("redis_cache", "redis_queue", "redis_socketio"):
+        if cfg.get(key) == old_redis:
+            cfg[key] = new_redis
+    old_sockets = {"/tmp/mysql.sock", "/opt/homebrew/var/mysql/mysql.sock", "/usr/local/var/mysql/mysql.sock"}
+    if cfg.get("db_socket") in old_sockets or (cfg.get("db_socket") == sock and str(cfg.get("db_port")) == "3306"):
+        cfg["db_socket"] = sock
+        cfg["db_port"] = int(db_port)
+        if "db_host" in cfg and cfg["db_host"] in ("localhost", "127.0.0.1"):
+            cfg["db_host"] = "127.0.0.1"
+        changed = True
+    if changed:
+        with open(path, "w") as fh:
+            json.dump(cfg, fh, indent=2)
+        print("vybench: moved " + path + " to vybench's own ports")
+PYEOF
 }
 
 # ---------------------------------------------------------------------------

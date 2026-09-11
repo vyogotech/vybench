@@ -7,7 +7,9 @@ set -e
 QUEUE="${1:-default}"
 
 bootstrap_common
-cd "$SNAP_COMMON/bench"
+# The active bench, resolved by snap-common.sh (current-bench, else the legacy one).
+BENCH_DIR="$LIVE_BENCH"
+cd "$BENCH_DIR"
 
 # Runs as snap_daemon, so bench's is_root() is false and change_uid() -- which
 # would try to setuid to a `frappe` user that does not exist on the host -- is

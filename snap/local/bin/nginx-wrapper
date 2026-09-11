@@ -20,7 +20,7 @@ NAMESERVER=$(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf 2>/dev/null ||
 WEB_PORT="$(site_conf webserver_port)"; [ -n "$WEB_PORT" ] || WEB_PORT=8000
 SIO_PORT="$(site_conf socketio_port)";  [ -n "$SIO_PORT" ] || SIO_PORT=9000
 
-export BENCH_SITES="$SNAP_COMMON/bench/sites"
+export BENCH_SITES="$LIVE_BENCH/sites"
 export BACKEND="127.0.0.1:$WEB_PORT"
 export SOCKETIO="127.0.0.1:$SIO_PORT"
 export NAMESERVER

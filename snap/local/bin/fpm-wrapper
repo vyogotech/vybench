@@ -1,0 +1,37 @@
+#!/bin/bash
+# fpm inside the snap: the bench it operates on is the writable copy under
+# $SNAP_COMMON, never the read-only payload in $SNAP. Installing an app writes an
+# apps/<app> symlink, pip-installs into env/, and links sites/assets — none of which
+# is possible against a squashfs, so --bench-path is defaulted here rather than left
+# to the caller to get right.
+set -euo pipefail
+
+BENCH="${VYBENCH_BENCH:-}"
+[ -z "$BENCH" ] && [ -L "$SNAP_COMMON/current-bench" ] && BENCH="$(readlink -f "$SNAP_COMMON/current-bench")"
+[ -z "$BENCH" ] && BENCH="$SNAP_COMMON/bench"
+
+if [ ! -d "$BENCH/sites" ]; then
+  echo "vybench: no bench at $BENCH yet — start it once (snap start vybench) before installing apps." >&2
+  exit 1
+fi
+
+# fpm keeps its store and repository configuration in $HOME/.fpm. Under strict
+# confinement $HOME is the snap's own writable area, so the store survives across
+# invocations and is not shared with the user's own fpm, which would be surprising.
+export HOME="${SNAP_USER_COMMON:-$SNAP_COMMON}"
+
+# --bench-path is supplied unless the caller named one, so `vybench.fpm install
+# frappe/crm==1.82.0` does the obvious thing.
+for arg in "$@"; do
+  case "$arg" in
+    --bench-path|--bench-path=*) exec "$SNAP/usr/bin/fpm" "$@" ;;
+  esac
+done
+
+case "${1:-}" in
+  install|deps|bundle)
+    exec "$SNAP/usr/bin/fpm" "$@" --bench-path "$BENCH"
+    ;;
+esac
+
+exec "$SNAP/usr/bin/fpm" "$@"

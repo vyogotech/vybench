@@ -5,7 +5,8 @@
 # 1. Initializes private MariaDB database under $VYBENCH_VAR/mariadb if not present.
 # 2. Sets character sets (utf8mb4), collation (utf8mb4_unicode_ci), and max packet.
 # 3. Automatically provisions root password and saves it to common_site_config.json.
-# 4. Runs mariadbd bound to $VYBENCH_RUN/mysql.sock.
+# 4. Runs mariadbd on $VYBENCH_RUN/mysql.sock and 127.0.0.1:$VYBENCH_DB_PORT,
+#    a port of its own so Homebrew's mariadb service (3306) can run alongside.
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -62,18 +63,24 @@ if [ ! -d "$DATA_DIR/mysql" ]; then
   # Seed root_password and socket path into common_site_config.json
   CFG="$BENCH_ROOT/sites/common_site_config.json"
   if [ -f "$CFG" ]; then
-    "$BENCH_PY" - "$CFG" "$ROOT_PW" "$SOCKET" <<'PYEOF'
+    "$BENCH_PY" - "$CFG" "$ROOT_PW" "$SOCKET" "$VYBENCH_DB_PORT" <<'PYEOF'
 import json, sys
-path, pw, sock = sys.argv[1], sys.argv[2], sys.argv[3]
+path, pw, sock, port = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 with open(path) as fh:
     cfg = json.load(fh)
 cfg["root_password"] = pw
 cfg["db_socket"] = sock
+cfg["db_port"] = int(port)
 with open(path, "w") as fh:
     json.dump(cfg, fh, indent=2)
 PYEOF
   fi
   echo "vybench: MariaDB initialized; credentials saved to common_site_config.json"
+fi
+# Keep /tmp/mysql.sock pointing at our socket if not present or already a symlink,
+# ensuring tools or legacy site configs expecting /tmp/mysql.sock connect seamlessly.
+if [ ! -e /tmp/mysql.sock ] || [ -L /tmp/mysql.sock ]; then
+  ln -sf "$SOCKET" /tmp/mysql.sock 2>/dev/null || true
 fi
 
 exec mariadbd \
@@ -81,7 +88,7 @@ exec mariadbd \
   --datadir="$DATA_DIR" \
   --socket="$SOCKET" \
   --pid-file="$PID_FILE" \
-  --port=3306 \
+  --port="$VYBENCH_DB_PORT" \
   --bind-address=127.0.0.1 \
   --character-set-server=utf8mb4 \
   --collation-server=utf8mb4_unicode_ci \

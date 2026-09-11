@@ -4,10 +4,9 @@
 # Started by launchd via `brew services start vybench`.
 # Manages the Frappe application tier (web/worker/scheduler/socketio).
 #
-# The datastores (MariaDB and Redis) are managed by their own separate
-# Homebrew service entries (`brew services start mariadb` and
-# `brew services start redis`). This script only manages the Frappe
-# application layer on top of them.
+# It also starts vybench's own MariaDB (vybench-mariadb-wrapper) and Redis, on
+# ports of their own ($VYBENCH_DB_PORT, $VYBENCH_REDIS_PORT), so Homebrew's
+# mariadb and redis services can keep running on 3306 and 6379.
 #
 # On SIGTERM/SIGINT: gracefully shuts down all child processes.
 set -e
@@ -43,51 +42,45 @@ start_process() {
 # ---------------------------------------------------------------------------
 # Datastores (MariaDB + Redis)
 # ---------------------------------------------------------------------------
-# Start dedicated MariaDB if socket or port not already in use
+# vybench runs its own MariaDB (vybench-mariadb-wrapper) on its own socket
+# and port, and its own Redis on its own port, so Homebrew's mariadb and redis
+# services (3306, 6379) can run alongside. A server that stopped (a crash, a
+# reboot) can leave its socket file behind, which would read as "already
+# running" and nothing would start.
 VYBENCH_MYSQL_SOCKET="$VYBENCH_RUN/mysql.sock"
-if [ ! -S "$VYBENCH_MYSQL_SOCKET" ] && ! nc -z 127.0.0.1 3306 2>/dev/null; then
-  log "Starting managed MariaDB daemon ($VYBENCH_MYSQL_SOCKET)..."
+if [ -S "$VYBENCH_MYSQL_SOCKET" ] && ! _vb_socket_live "$VYBENCH_MYSQL_SOCKET"; then
+  log "Removing stale MariaDB socket $VYBENCH_MYSQL_SOCKET"
+  rm -f "$VYBENCH_MYSQL_SOCKET"
+fi
+if [ -S "$VYBENCH_MYSQL_SOCKET" ]; then
+  log "vybench's MariaDB is already running ($VYBENCH_MYSQL_SOCKET)"
+elif nc -z 127.0.0.1 "$VYBENCH_DB_PORT" 2>/dev/null; then
+  log_err "Port $VYBENCH_DB_PORT is used by another program, so vybench's MariaDB cannot start."
+  log_err "Free it, or pick another port: VYBENCH_DB_PORT in the service environment."
+else
+  log "Starting vybench's MariaDB ($VYBENCH_MYSQL_SOCKET, port $VYBENCH_DB_PORT)..."
   start_process "mariadb" "$SCRIPT_DIR/vybench-mariadb-wrapper"
   wait_for_socket "$VYBENCH_MYSQL_SOCKET" "MariaDB" 60 || true
-  MYSQL_SOCKET="$VYBENCH_MYSQL_SOCKET"
-  export MYSQL_UNIX_PORT="$MYSQL_SOCKET"
-elif [ ! -S "$VYBENCH_MYSQL_SOCKET" ] && nc -z 127.0.0.1 3306 2>/dev/null; then
-  # Reusing stock Homebrew MariaDB (or another server already on :3306).
-  # Retarget common_site_config so frappe does not try the non-existent
-  # vybench-managed socket baked into the formula's default config.
-  for _sock in \
-      "$(mariadb_config --socket 2>/dev/null || true)" \
-      /tmp/mysql.sock \
-      "$HOMEBREW_PREFIX/var/mysql/mysql.sock"; do
-    [ -n "$_sock" ] || continue
-    if [ -S "$_sock" ]; then
-      CFG="$BENCH_ROOT/sites/common_site_config.json"
-      if [ -f "$CFG" ] && [ -x "$BENCH_PY" ]; then
-        "$BENCH_PY" - "$CFG" "$_sock" <<'PYEOF' || true
-import json, sys
-path, sock = sys.argv[1], sys.argv[2]
-with open(path) as fh:
-    cfg = json.load(fh)
-if cfg.get("db_socket") != sock:
-    cfg["db_socket"] = sock
-    with open(path, "w") as fh:
-        json.dump(cfg, fh, indent=2)
-PYEOF
-      fi
-      MYSQL_SOCKET="$_sock"
-      export MYSQL_UNIX_PORT="$_sock"
-      log "Reusing external MariaDB at $_sock (retargeted db_socket)"
-      break
-    fi
-  done
 fi
 
-# Start dedicated Redis if port 6379 not already in use
-if ! nc -z 127.0.0.1 6379 2>/dev/null; then
-  log "Starting managed Redis daemon..."
-  start_process "redis" redis-server --port 6379 --dir "$VYBENCH_VAR/redis" --daemonize no
-  wait_for_tcp 127.0.0.1 6379 "Redis" 30 || true
+if [ -S "$VYBENCH_MYSQL_SOCKET" ]; then
+  if [ ! -e /tmp/mysql.sock ] || [ -L /tmp/mysql.sock ]; then
+    ln -sf "$VYBENCH_MYSQL_SOCKET" /tmp/mysql.sock 2>/dev/null || true
+  fi
 fi
+
+if nc -z 127.0.0.1 "$VYBENCH_REDIS_PORT" 2>/dev/null; then
+  log "Redis is already running on port $VYBENCH_REDIS_PORT"
+else
+  log "Starting vybench's Redis (port $VYBENCH_REDIS_PORT)..."
+  start_process "redis" redis-server --port "$VYBENCH_REDIS_PORT" --bind 127.0.0.1 \
+    --dir "$VYBENCH_VAR/redis" --daemonize no
+  wait_for_tcp 127.0.0.1 "$VYBENCH_REDIS_PORT" "Redis" 30 || true
+fi
+
+# Now that vybench's servers are on their own ports, move bench and site
+# configs still pointing at the old shared ones (3306, 6379).
+migrate_all_ports | while read -r _vb_line; do log "$_vb_line"; done
 
 # ---------------------------------------------------------------------------
 # Configuration

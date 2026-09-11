@@ -4,7 +4,9 @@ set -e
 . "$SNAP/bin/snap-common.sh"
 
 bootstrap_common
-cd "$SNAP_COMMON/bench"
+# The active bench, resolved by snap-common.sh (current-bench, else the legacy one).
+BENCH_DIR="$LIVE_BENCH"
+cd "$BENCH_DIR"
 
 # Node's realtime server. It resolves node_modules relative to the script's own
 # location (apps/frappe/node_modules), so it must be launched by path from the
