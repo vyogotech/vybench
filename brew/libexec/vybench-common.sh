@@ -73,6 +73,18 @@ BENCH_PY="$BENCH_ROOT/env/bin/python3"
 [ -x "$BENCH_PY" ] || BENCH_PY="$BENCH_ROOT/env/bin/python"
 export BENCH_CLI="$BENCH_ROOT/env/bin/bench"
 
+if [ ! -x "$BENCH_CLI" ]; then
+  if [ -x "$VYBENCH_VAR/bench/env/bin/bench" ]; then
+    BENCH_CLI="$VYBENCH_VAR/bench/env/bin/bench"
+    BENCH_PY="$VYBENCH_VAR/bench/env/bin/python3"
+    [ -x "$BENCH_PY" ] || BENCH_PY="$VYBENCH_VAR/bench/env/bin/python"
+  elif [ -x "$VYBENCH_LIBEXEC/frappe-bench/env/bin/bench" ]; then
+    BENCH_CLI="$VYBENCH_LIBEXEC/frappe-bench/env/bin/bench"
+    BENCH_PY="$VYBENCH_LIBEXEC/frappe-bench/env/bin/python3"
+    [ -x "$BENCH_PY" ] || BENCH_PY="$VYBENCH_LIBEXEC/frappe-bench/env/bin/python"
+  fi
+fi
+
 # Homebrew-managed dependencies
 MARIADB_PREFIX="$HOMEBREW_PREFIX/opt/mariadb"
 REDIS_PREFIX="$HOMEBREW_PREFIX/opt/redis"

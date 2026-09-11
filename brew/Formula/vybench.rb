@@ -128,7 +128,7 @@ class Vybench < Formula
     # ── Ensure correct bench version in the snap venv too ─────────────────
     venv_pip = bench_src/"env/bin/pip"
     system venv_pip, "install", "frappe-bench==5.31.0"
-    system venv_pip, "install", "--upgrade", "click~=8.3.1"
+    system venv_pip, "install", "--upgrade", "click~=8.4.1"
 
     # ── Fetch ERPNext v16 ──────────────────────────────────────────────────
     cd bench_src do
@@ -245,62 +245,64 @@ class Vybench < Formula
     cfg_dst.write((buildpath/"brew/etc/vybench/common_site_config.json").read) unless cfg_dst.exist?
   end
 
-  def post_install
-    vybench_var  = var/"vybench"
-    vybench_run  = var/"run/vybench"
-    vybench_log  = var/"log/vybench"
-    bench_root   = vybench_var/"bench"
-    mariadb_data = vybench_var/"mariadb"
-    redis_data   = vybench_var/"redis"
+  post_install_steps do
+    mkdir_p "vybench", base: :var
+    mkdir_p "run/vybench", base: :var
+    mkdir_p "log/vybench", base: :var
+    mkdir_p "vybench/mariadb", base: :var
+    mkdir_p "vybench/redis", base: :var
+    mkdir_p "vybench/bench/logs", base: :var
+    mkdir_p "vybench/bench/config/pids", base: :var
+    mkdir_p "vybench/bench/sites", base: :var
 
-    # ── Data directories ───────────────────────────────────────────────────
-    [vybench_var, vybench_run, vybench_log, mariadb_data, redis_data,
-     bench_root/"logs", bench_root/"config/pids", bench_root/"sites"].each(&:mkpath)
-
-    # ── Rewrite socket path in etc config ─────────────────────────────────
-    cfg_path = etc/"vybench/common_site_config.json"
-    if cfg_path.exist?
-      content = cfg_path.read
-      content.gsub!("VYBENCH_RUN_PLACEHOLDER", vybench_run.to_s)
-      File.write(cfg_path, content)
+    if_path_exists "vybench/common_site_config.json", base: :etc do
+      inreplace "vybench/common_site_config.json", "VYBENCH_RUN_PLACEHOLDER", "{{var}}/run/vybench", base: :etc
     end
 
-    # ── Seed bench sites config from etc ──────────────────────────────────
-    bench_cfg = bench_root/"sites/common_site_config.json"
-    cp cfg_path, bench_cfg if cfg_path.exist? && !bench_cfg.exist?
-
-    # ── Extract hidden venv ───────────────────────────────────────────────
-    bench_src = libexec/"frappe-bench"
-    if (bench_src/"env.tar.gz").exist?
-      cd bench_src do
-        system "tar", "-xzf", "env.tar.gz"
-        rm "env.tar.gz"
+    if_path_exists "vybench/common_site_config.json", base: :etc do
+      unless_path_exists "vybench/bench/sites/common_site_config.json", base: :var do
+        copy "vybench/common_site_config.json", "vybench/bench/sites/common_site_config.json",
+             source_base: :etc, target_base: :var
       end
     end
 
-    # Put back the Node add-ons hidden from the linkage fix phase
-    if (bench_src/"native-addons.tar.gz").exist?
-      cd bench_src do
-        system "tar", "-xzf", "native-addons.tar.gz"
-        rm "native-addons.tar.gz"
+    if_path_exists "frappe-bench/env.tar.gz", base: :libexec do
+      run "/usr/bin/tar",
+          args: ["-xzf", "{{libexec}}/frappe-bench/env.tar.gz", "-C", "{{libexec}}/frappe-bench"]
+      remove "frappe-bench/env.tar.gz", base: :libexec
+    end
+
+    if_path_exists "frappe-bench/native-addons.tar.gz", base: :libexec do
+      run "/usr/bin/tar",
+          args: ["-xzf", "{{libexec}}/frappe-bench/native-addons.tar.gz", "-C",
+                 "{{libexec}}/frappe-bench"]
+      remove "frappe-bench/native-addons.tar.gz", base: :libexec
+    end
+
+    unless_path_exists "vybench/bench/apps", base: :var do
+      symlink "{{libexec}}/frappe-bench/apps", "vybench/bench/apps", target_base: :var
+    end
+
+    unless_path_exists "vybench/bench/env", base: :var do
+      symlink "{{libexec}}/frappe-bench/env", "vybench/bench/env", target_base: :var
+    end
+
+    unless_path_exists "vybench/bench/sites/assets", base: :var do
+      symlink "{{libexec}}/frappe-bench/sites/assets", "vybench/bench/sites/assets", target_base: :var
+    end
+
+    if_path_exists "frappe-bench/sites/apps.txt", base: :libexec do
+      unless_path_exists "vybench/bench/sites/apps.txt", base: :var do
+        copy "frappe-bench/sites/apps.txt", "vybench/bench/sites/apps.txt",
+             source_base: :libexec, target_base: :var
       end
     end
 
-    # ── apps/ and env/ symlinks into libexec ──────────────────────────────
-    %w[apps env].each do |tree|
-      link = bench_root/tree
-      link.make_symlink(bench_src/tree) if !link.exist? && !link.symlink?
-    end
-
-    # ── sites/assets symlink ───────────────────────────────────────────────
-    assets_link = bench_root/"sites/assets"
-    assets_link.make_symlink(bench_src/"sites/assets") if !assets_link.exist? && !assets_link.symlink?
-
-    # ── Seed apps.txt ──────────────────────────────────────────────────────
-    ["apps.txt", "apps.json"].each do |f|
-      dst = bench_root/"sites/#{f}"
-      src = bench_src/"sites/#{f}"
-      File.write(dst, src.read) if src.exist? && !dst.exist?
+    if_path_exists "frappe-bench/sites/apps.json", base: :libexec do
+      unless_path_exists "vybench/bench/sites/apps.json", base: :var do
+        copy "frappe-bench/sites/apps.json", "vybench/bench/sites/apps.json",
+             source_base: :libexec, target_base: :var
+      end
     end
   end
 

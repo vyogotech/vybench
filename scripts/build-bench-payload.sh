@@ -271,12 +271,12 @@ PY
       # 'frappe 16.31.0 requires Click~=8.3.1, but you have click 8.1.8'.
       $BENCH_DIR/env/bin/pip install --quiet 'frappe-bench==$BENCH_CLI_VERSION'
 
-      # frappe-bench declares click~=8.2.0 and frappe v16 declares click~=8.3.1.
+      # frappe-bench declares click~=8.2.0 and frappe v16 declares click~=8.4.1.
       # Those cannot both be satisfied -- no click version exists in both ranges.
       # frappe is the application that actually runs under gunicorn and the
       # workers, so it wins; bench's constraint is the conservative one and its
       # CLI surface is exercised by test-native-package.sh.
-      $BENCH_DIR/env/bin/pip install --quiet --upgrade 'click~=8.3.1'
+      $BENCH_DIR/env/bin/pip install --quiet --upgrade 'click~=8.4.1'
     "
 
   # --- extra apps ----------------------------------------------------------

@@ -120,7 +120,7 @@ class VybenchLocal < Formula
     # ── Ensure bench CLI is in the snap venv too ──────────────────────────
     venv_pip = bench_src/"env/bin/pip"
     system venv_pip, "--quiet", "install", "frappe-bench==5.31.0"
-    system venv_pip, "--quiet", "install", "--upgrade", "click~=8.3.1"
+    system venv_pip, "--quiet", "install", "--upgrade", "click~=8.4.1"
 
     # ── Fetch ERPNext v16 ─────────────────────────────────────────────────
     cd bench_src do

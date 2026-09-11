@@ -311,7 +311,7 @@ parts:
 
         # Ensure bench CLI & psycopg2 are installed inside the snap bench env
         ./frappe-bench/env/bin/pip install 'frappe-bench==5.31.0'
-        ./frappe-bench/env/bin/pip install --upgrade 'click~=8.3.1'
+        ./frappe-bench/env/bin/pip install --upgrade 'click~=8.4.1'
         ./frappe-bench/env/bin/pip install psycopg2-binary
 
         # Bundle ERPNext develop directly in the snap package

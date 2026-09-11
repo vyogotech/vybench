@@ -363,9 +363,9 @@ parts:
         # No click pin: bench init installs the Click 8.3.x frappe v16 requires
         # (~=8.3.1), and pinning <8.2 downgraded it to 8.1.8 -- which frappe then
         # reports as incompatible. bench declares click~=8.2.0, frappe declares
-        # ~=8.3.1, and no version satisfies both; frappe is what actually runs.
+        # ~=8.4.1, and no version satisfies both; frappe is what actually runs.
         ./frappe-bench/env/bin/pip install 'frappe-bench==5.31.0'
-        ./frappe-bench/env/bin/pip install --upgrade 'click~=8.3.1'
+        ./frappe-bench/env/bin/pip install --upgrade 'click~=8.4.1'
 
         # Bundle ERPNext v16 directly in the snap package
         cd $SNAPCRAFT_PART_INSTALL/opt/frappe-bench
