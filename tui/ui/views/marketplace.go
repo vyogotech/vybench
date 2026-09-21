@@ -3,6 +3,8 @@ package views
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -17,6 +19,16 @@ import (
 )
 
 type catalogMsg struct{ cat core.Catalog }
+
+type fpmVersionMsg struct {
+	version string
+	latest  string
+}
+
+type fpmUpdatedMsg struct {
+	newVersion string
+	err        error
+}
 
 type detailsMsg struct {
 	key     string
@@ -49,6 +61,10 @@ type MarketplaceModel struct {
 	installed map[string]string
 	sites     []string
 	target    int // 0 installs into the bench only; n installs onto sites[n-1] too
+
+	fpmVersion  string
+	fpmLatest   string
+	fpmUpdating bool
 
 	inspector viewport.Model
 	width     int
@@ -84,8 +100,10 @@ func NewMarketplaceModel(fpm *core.FPMClient, bench core.ActiveBench) Marketplac
 	}
 }
 
-// Init fetches the catalog in the background.
-func (m MarketplaceModel) Init() tea.Cmd { return m.fetchCatalog() }
+// Init fetches the catalog and checks FPM version in the background.
+func (m MarketplaceModel) Init() tea.Cmd {
+	return tea.Batch(m.fetchCatalog(), m.checkFPMVersion())
+}
 
 func (m MarketplaceModel) fetchCatalog() tea.Cmd {
 	fpm := m.fpm
@@ -93,6 +111,44 @@ func (m MarketplaceModel) fetchCatalog() tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		return catalogMsg{cat: fpm.FetchCatalog(ctx)}
+	}
+}
+
+func (m MarketplaceModel) checkFPMVersion() tea.Cmd {
+	return func() tea.Msg {
+		bin, err := core.FindFPM()
+		ver := ""
+		if err == nil {
+			ver = core.FPMVersion(bin)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cacheDir := filepath.Join(os.Getenv("HOME"), ".local", "share", "vybench")
+		if core.DetectPlatform() == core.PlatformSnap {
+			if common := os.Getenv("SNAP_COMMON"); common != "" {
+				cacheDir = common
+			}
+		}
+		latest, _ := core.CheckLatestFPM(ctx, nil, cacheDir)
+		return fpmVersionMsg{version: ver, latest: latest}
+	}
+}
+
+func (m MarketplaceModel) updateFPM() tea.Cmd {
+	tag := m.fpmLatest
+	if tag == "" {
+		tag = "latest"
+	}
+	destDir := core.DynamicFPMDirectory()
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		installedPath, err := core.DownloadFPM(ctx, nil, tag, destDir)
+		if err != nil {
+			return fpmUpdatedMsg{err: err}
+		}
+		newVer := core.FPMVersion(installedPath)
+		return fpmUpdatedMsg{newVersion: newVer}
 	}
 }
 
@@ -136,6 +192,30 @@ func (m MarketplaceModel) targetSite() string {
 	return ""
 }
 
+// SetTargetSite preselects the given site as the installation target.
+func (m *MarketplaceModel) SetTargetSite(site string) {
+	for i, s := range m.sites {
+		if s == site {
+			m.target = i + 1
+			m.refreshInspector()
+			return
+		}
+	}
+	m.sites = core.DiscoverSites(m.bench.Path)
+	for i, s := range m.sites {
+		if s == site {
+			m.target = i + 1
+			m.refreshInspector()
+			return
+		}
+	}
+	if site != "" {
+		m.sites = append(m.sites, site)
+		m.target = len(m.sites)
+		m.refreshInspector()
+	}
+}
+
 func (m MarketplaceModel) Update(msg tea.Msg) (MarketplaceModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case catalogMsg:
@@ -154,9 +234,24 @@ func (m MarketplaceModel) Update(msg tea.Msg) (MarketplaceModel, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case detailsMsg:
-		m.details[msg.key] = &detailState{details: msg.details, err: msg.err}
-		m.refreshInspector()
+	m.details[msg.key] = &detailState{details: msg.details, err: msg.err}
+	m.refreshInspector()
+	return m, nil
+
+	case fpmVersionMsg:
+		m.fpmVersion = msg.version
+		m.fpmLatest = msg.latest
 		return m, nil
+
+	case fpmUpdatedMsg:
+		m.fpmUpdating = false
+		if msg.err != nil {
+			return m, emit(StatusMsg{Text: "FPM update failed: " + msg.err.Error(), Err: true})
+		}
+		if msg.newVersion != "" {
+			m.fpmVersion = msg.newVersion
+		}
+		return m, emit(StatusMsg{Text: fmt.Sprintf("FPM updated to %s successfully.", m.fpmVersion)})
 
 	case BenchSwitchedMsg:
 		m.bench = msg.Bench
@@ -228,6 +323,15 @@ func (m MarketplaceModel) Update(msg tea.Msg) (MarketplaceModel, tea.Cmd) {
 			return m, m.fetchCatalog()
 		case "i":
 			return m, m.install()
+		case "u":
+			if m.fpmUpdating {
+				return m, nil
+			}
+			m.fpmUpdating = true
+			return m, tea.Batch(
+				emit(StatusMsg{Text: "Updating FPM..."}),
+				m.updateFPM(),
+			)
 		default:
 			var cmd tea.Cmd
 			m.inspector, cmd = m.inspector.Update(msg)
@@ -488,6 +592,13 @@ func (m MarketplaceModel) viewList(w int) string {
 	footer := theme.StyleMuted.Render(fmt.Sprintf(" %d packages from %s", len(m.catalog.Packages), m.catalog.Source))
 	if m.catalog.Offline {
 		footer = theme.StyleBadgeWarn.Render(" ⚠ offline catalog (registry unreachable)")
+	}
+	if m.fpmVersion != "" {
+		fpmText := "  ·  fpm " + m.fpmVersion
+		if m.fpmLatest != "" && m.fpmLatest != "v"+m.fpmVersion && m.fpmLatest != m.fpmVersion {
+			fpmText += " (" + m.fpmLatest + " available, [u] update)"
+		}
+		footer += theme.StyleMuted.Render(fpmText)
 	}
 	return strings.Join(append(lines, footer+scrollHint(start, end, len(m.filtered))), "\n")
 }

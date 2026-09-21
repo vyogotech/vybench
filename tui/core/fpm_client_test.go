@@ -219,6 +219,7 @@ func TestFindFPMSkipsRubyFPM(t *testing.T) {
 	t.Setenv("VYBENCH_FPM", "")
 	t.Setenv("SNAP", "")
 	t.Setenv("VYBENCH_LIBEXEC", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "fpm"), "#!/bin/sh\necho 'Effing Package Management'\n")
 	if err := os.Chmod(filepath.Join(dir, "fpm"), 0o755); err != nil {

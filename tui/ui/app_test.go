@@ -200,3 +200,109 @@ func TestJobOverlayBlocksTabsUntilClosed(t *testing.T) {
 	close(release)
 	f.app.Shutdown()
 }
+
+func TestAppExtended(t *testing.T) {
+	f := newFixture(t)
+
+	// Init
+	initCmd := f.app.Init()
+	if initCmd == nil {
+		t.Error("expected non-nil Init command")
+	}
+
+	// Width 0 returns Loading...
+	zeroApp := f.app
+	zeroApp.width = 0
+	if zeroApp.View() != "Loading…" {
+		t.Errorf("expected Loading…, got %s", zeroApp.View())
+	}
+
+	// Tab and shift+tab navigation
+	f.send(keyMsg("tab"))
+	if f.app.tab != TabSites {
+		t.Errorf("expected TabSites, got %d", f.app.tab)
+	}
+	f.send(keyMsg("shift+tab"))
+	if f.app.tab != TabOverview {
+		t.Errorf("expected TabOverview, got %d", f.app.tab)
+	}
+
+	// Mouse message routing
+	f.send(tea.MouseMsg{Type: tea.MouseMotion})
+
+	// Ctrl+c key handling
+	_, cmd := f.app.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Error("expected quit command on ctrl+c")
+	}
+
+	// Status messages: normal, error, long
+	f.send(views.StatusMsg{Text: "Everything OK", Err: false})
+	if !strings.Contains(ansi.Strip(f.app.View()), "Everything OK") {
+		t.Error("expected status text in view")
+	}
+
+	f.send(views.StatusMsg{Text: "Error happened", Err: true})
+	if !strings.Contains(ansi.Strip(f.app.View()), "Error happened") {
+		t.Error("expected error text in view")
+	}
+
+	f.send(views.StatusMsg{Text: strings.Repeat("Very long error status that exceeds the available width of status bar ", 5), Err: true})
+	_ = f.app.View()
+
+	// Clear status msg
+	f.send(clearStatusMsg{seq: f.app.statusSeq})
+	if f.app.status != "" {
+		t.Errorf("status should be cleared, got %q", f.app.status)
+	}
+	// Mismatched seq should not clear
+	f.app.status = "keep me"
+	f.send(clearStatusMsg{seq: 99999})
+	if f.app.status != "keep me" {
+		t.Error("status should not clear with mismatched seq")
+	}
+
+	// Header badges for unregistered and pinned benches
+	unregisteredApp := f.app
+	unregisteredApp.bench = core.ActiveBench{
+		Name:       "unreg",
+		Registered: false,
+		Source:     core.SourceEnv,
+		Entry:      core.BenchEntry{DBEngine: "postgres", FrappeVersion: "v15.0.0"},
+	}
+	viewUnreg := ansi.Strip(unregisteredApp.View())
+	if !strings.Contains(viewUnreg, "unregistered") {
+		t.Errorf("expected unregistered in header, got: %s", viewUnreg)
+	}
+}
+
+func TestSwitchToMarketplaceFromSites(t *testing.T) {
+	f := newFixture(t)
+	f.send(keyMsg("2")) // switch to Sites tab
+	if f.app.tab != TabSites {
+		t.Fatalf("expected to be on Sites tab, got %d", f.app.tab)
+	}
+	m, cmd := f.app.Update(keyMsg("a"))
+	f.app = m.(App)
+	if cmd == nil {
+		t.Fatal("expected command on pressing 'a'")
+	}
+	msgs := run(cmd)
+	for _, msg := range msgs {
+		m, cmd2 := f.app.Update(msg)
+		f.app = m.(App)
+		for _, msg2 := range run(cmd2) {
+			m, _ = f.app.Update(msg2)
+			f.app = m.(App)
+		}
+	}
+
+	if f.app.tab != TabMarketplace {
+		t.Fatalf("expected to switch to TabMarketplace (2), got %d", f.app.tab)
+	}
+	if !strings.Contains(f.app.status, "Select an app to install on 'a.localhost'") {
+		t.Errorf("status bar missing target site prompt: %q", f.app.status)
+	}
+}
+
+

@@ -9,6 +9,7 @@
 //	vybench bench new <name> [--db E] [--version V] [--python P] [--switch=false]
 //	vybench bench attach <name> <path> [--db E]   register an existing bench
 //	vybench bench drop <name>                     remove a bench from the registry
+//	vybench doctor [--fix] [--all]                diagnose, and repair, a broken bench
 //	vybench-tui --bench-path DIR                  open the TUI on another bench
 //	vybench-tui --version                         print the version
 package main
@@ -33,17 +34,30 @@ import (
 var version = "dev"
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "bench" {
-		os.Exit(runBenchCLI(os.Args[2:]))
+	os.Exit(runMain(os.Args, os.Stdin, os.Stdout, os.Stderr))
+}
+
+func runMain(args []string, stdin, stdout, stderr *os.File) int {
+	core.EnsureSnapDaemonGroup()
+
+	if len(args) > 1 && args[1] == "bench" {
+		return runBenchCLI(args[2:])
+	}
+	if len(args) > 1 && args[1] == "doctor" {
+		return runDoctorCLI(args[2:], stdout, stderr)
 	}
 
-	benchPath := flag.String("bench-path", "", "open the TUI on this bench instead of the active one")
-	showVer := flag.Bool("version", false, "print the version and exit")
-	flag.Parse()
+	fs := flag.NewFlagSet("vybench-tui", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	benchPath := fs.String("bench-path", "", "open the TUI on this bench instead of the active one")
+	showVer := fs.Bool("version", false, "print the version and exit")
+	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
 
 	if *showVer {
-		fmt.Println("vybench-tui", version)
-		return
+		fmt.Fprintln(stdout, "vybench-tui", version)
+		return 0
 	}
 	if *benchPath != "" {
 		abs, err := filepath.Abs(*benchPath)
@@ -51,25 +65,26 @@ func main() {
 			err = fmt.Errorf("%s is not a bench (it has no sites/ directory)", abs)
 		}
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "vybench-tui:", err)
-			os.Exit(2)
+			fmt.Fprintln(stderr, "vybench-tui:", err)
+			return 2
 		}
 		_ = os.Setenv("VYBENCH_BENCH", abs)
 	}
-	if !isTerminal(os.Stdin) || !isTerminal(os.Stdout) {
-		fmt.Fprintln(os.Stderr, "vybench-tui: the interactive TUI needs a terminal; use 'vybench bench list' and friends in scripts")
-		os.Exit(1)
+	if !isTerminalFunc(stdin) || !isTerminalFunc(stdout) {
+		fmt.Fprintln(stderr, "vybench-tui: the interactive TUI needs a terminal; use 'vybench bench list' and friends in scripts")
+		return 1
 	}
 
 	app := ui.NewApp(core.NewManager(), core.NewSupervisor(), core.NewFPMClient())
-	final, err := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
+	final, err := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithInput(stdin), tea.WithOutput(stdout)).Run()
 	if a, ok := final.(ui.App); ok {
 		a.Shutdown()
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "vybench-tui:", err)
-		os.Exit(1)
+		fmt.Fprintln(stderr, "vybench-tui:", err)
+		return 1
 	}
+	return 0
 }
 
 func runBenchCLI(args []string) int {
@@ -92,6 +107,8 @@ func runBenchCLI(args []string) int {
 		err = cmdAttach(mgr, args[1:])
 	case "drop":
 		err = cmdDrop(mgr, args[1:])
+	case "doctor":
+		return runDoctorCLI(args[1:], os.Stdout, os.Stderr)
 	default:
 		fmt.Fprintf(os.Stderr, "vybench: unknown bench command %q\n\n", args[0])
 		printBenchHelp(os.Stderr)
@@ -132,6 +149,7 @@ Commands:
       --switch=false                  do not make the new bench active
   attach <name> <path> [--db E]     Register an existing bench directory
   drop <name>                       Remove a bench from the registry (files are kept)
+  doctor [--fix] [--all]            Diagnose the bench and, with --fix, repair what it can
 `)
 }
 
@@ -265,7 +283,7 @@ func cmdNew(mgr *core.Manager, args []string) error {
 		if err != nil {
 			return err
 		}
-		if err := runSteps(spec); err != nil {
+		if err := runStepsFunc(spec); err != nil {
 			return err
 		}
 		fmt.Printf("\nCreated bench '%s' (%s, Frappe %s) at %s.\n", plan.Name, plan.DBEngine, plan.Branch, plan.Path)
@@ -285,6 +303,8 @@ func postgresHint() string {
 	}
 	return "Install and start PostgreSQL 16 before creating sites on this bench."
 }
+
+var runStepsFunc = runSteps
 
 // runSteps runs a job in the foreground with the terminal attached, so bench
 // shows its own progress and Ctrl+C reaches it directly.
@@ -344,6 +364,8 @@ func cmdDrop(mgr *core.Manager, args []string) error {
 	fmt.Printf("Removed '%s' from the registry. Its files were kept.\n", args[0])
 	return nil
 }
+
+var isTerminalFunc = isTerminal
 
 func isTerminal(f *os.File) bool {
 	fi, err := f.Stat()

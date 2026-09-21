@@ -78,6 +78,13 @@ show_help() {
 
     vybench tui                          launch interactive TUI
 
+  DIAGNOSE AND REPAIR
+
+    vybench doctor                       check the active bench and explain
+                                         anything wrong with it
+    vybench doctor --fix                 repair what can be repaired
+    vybench doctor --all                 check every registered bench
+
   MULTI-BENCH MANAGEMENT
 
     vybench bench list                   list registered benches (* = active)
@@ -158,6 +165,15 @@ case "$CMD" in
     exec "$TUI_BIN" "$@"
     ;;
 
+  # ── diagnose and repair ───────────────────────────────────────────────
+  doctor)
+    if [ ! -x "$TUI_BIN" ]; then
+      echo "vybench: 'doctor' needs vybench-tui, which is not installed. Build it with 'make tui'." >&2
+      exit 1
+    fi
+    exec "$TUI_BIN" doctor "$@"
+    ;;
+
   # ── bench commands & passthrough ──────────────────────────────────────
   bench)
     # Multi-bench commands belong to vybench-tui. These names never reach
@@ -169,6 +185,13 @@ case "$CMD" in
           exit 1
         fi
         exec "$TUI_BIN" bench "$@"
+        ;;
+      doctor)
+        if [ ! -x "$TUI_BIN" ]; then
+          echo "vybench: 'bench doctor' needs vybench-tui, which is not installed. Build it with 'make tui'." >&2
+          exit 1
+        fi
+        exec "$TUI_BIN" "$@"
         ;;
     esac
 

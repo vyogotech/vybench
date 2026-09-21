@@ -641,6 +641,17 @@ func (m *Manager) register(plan BenchPlan) error {
 // prepareBenchesDir makes the parent of new benches. Inside the snap, bench
 // runs as snap_daemon even under sudo, so the directory must belong to it.
 func prepareBenchesDir(dir string) error {
+	// 0o775, and no attempt at setgid. Measured inside the snap: mkdir(2) cannot
+	// set it either way -- the kernel masks a new directory's mode to
+	// S_IRWXUGO|S_ISVTX -- and the chmod that could is refused by snapd's
+	// seccomp policy (~chmod - |S_ISGID). A directory inside a strict snap gets
+	// setgid only by inheriting it from a parent that already has it. Asking for
+	// 0o2775 here looked like it did something and did not: Go's FileMode uses
+	// os.ModeSetgid, not octal 2000, so the bit was dropped before the syscall.
+	//
+	// It costs nothing in practice. snap-common.sh sets umask 002, and every
+	// process that writes here runs as snap_daemon, so new files already land
+	// group-writable with the right group.
 	if err := os.MkdirAll(dir, 0o775); err != nil {
 		return err
 	}
@@ -653,10 +664,7 @@ func prepareBenchesDir(dir string) error {
 	}
 	uid, _ := strconv.Atoi(u.Uid)
 	gid, _ := strconv.Atoi(u.Gid)
-	if err := os.Chown(dir, uid, gid); err != nil {
-		return err
-	}
-	return os.Chmod(dir, 0o2775)
+	return os.Chown(dir, uid, gid)
 }
 
 var benchNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$`)

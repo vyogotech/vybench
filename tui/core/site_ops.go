@@ -5,11 +5,14 @@ package core
 // hand-typed command.
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -76,6 +79,13 @@ func NewSiteSpec(benchPath string, o NewSiteOptions) (JobSpec, error) {
 		args = append(args, "--db-root-username", user)
 		if o.DBRootPassword != "" {
 			args = append(args, "--db-root-password", o.DBRootPassword)
+		}
+	} else if engine == "mariadb" {
+		if pw := ResolveMariaDBRootPassword(benchPath, o.DBRootPassword); pw != "" {
+			args = append(args, "--mariadb-root-password", pw)
+		}
+		if sock := resolveMariaDBSocket(benchPath); sock != "" {
+			args = append(args, "--db-socket", sock)
 		}
 	}
 	for _, app := range o.InstallApps {
@@ -148,6 +158,12 @@ func DropSiteSpec(benchPath, site string, force bool, check SiteCheck) (JobSpec,
 		}}}, nil
 	}
 	args := []string{"drop-site", site}
+	if pw := ResolveMariaDBRootPassword(benchPath, ""); pw != "" {
+		args = append(args, "--mariadb-root-password", pw)
+	}
+	if sock := resolveMariaDBSocket(benchPath); sock != "" {
+		args = append(args, "--db-socket", sock)
+	}
 	label := "Dropping " + site + " (bench backs it up first)"
 	if force {
 		args = append(args, "--force")
@@ -158,13 +174,16 @@ func DropSiteSpec(benchPath, site string, force bool, check SiteCheck) (JobSpec,
 
 // archiveSite moves sites/<site> to archived/sites/<site>-<time>, where
 // bench drop-site puts the sites it removes.
+// archiveSite moves a site directory aside. The move is made by the account
+// that owns the bench: inside a strict snap the tree belongs to snap_daemon and
+// root cannot create archived/ in it, because root there has no DAC override.
 func archiveSite(benchPath, site string) (string, error) {
 	dir := filepath.Join(benchPath, "archived", "sites")
-	if err := os.MkdirAll(dir, 0o775); err != nil {
+	if err := daemonMkdirAll(dir); err != nil {
 		return "", err
 	}
 	dest := filepath.Join(dir, site+"-"+time.Now().Format("20060102_150405"))
-	return dest, os.Rename(filepath.Join(benchPath, "sites", site), dest)
+	return dest, daemonRename(filepath.Join(benchPath, "sites", site), dest)
 }
 
 func benchJob(benchPath, label string, args ...string) (JobSpec, error) {
@@ -331,7 +350,16 @@ func RestoreSpec(benchPath string, o RestoreOptions) (JobSpec, error) {
 		if o.DBRootPassword != "" {
 			args = append(args, "--db-root-password", o.DBRootPassword)
 		}
+	} else if o.DBRootPassword != "" {
+		args = append(args, "--mariadb-root-password", o.DBRootPassword)
+	} else if pw := ResolveMariaDBRootPassword(benchPath, ""); pw != "" {
+		args = append(args, "--mariadb-root-password", pw)
 	}
+	// No --db-socket here, unlike new-site: `bench restore` does not accept it
+	// ("Error: No such option '--db-socket'"), so passing it made every restore
+	// on a socket-based install (the snap, Homebrew) fail after its safety
+	// backup had already run. restore takes the socket from the bench's
+	// common_site_config.json, which vybench writes db_socket into.
 	var steps []Step
 	if o.BackupFirst && SiteExists(benchPath, o.Site) {
 		backup, err := BackupSpec(benchPath, o.Site)
@@ -369,4 +397,149 @@ func humanSize(n int64) string {
 		return fmt.Sprintf("%.0f KB", float64(n)/(1<<10))
 	}
 	return fmt.Sprintf("%d B", n)
+}
+
+func resolveMariaDBRootPassword(benchPath string, explicit string) string {
+	return ResolveMariaDBRootPassword(benchPath, explicit)
+}
+
+func ResolveMariaDBRootPassword(benchPath string, explicit string) string {
+	if explicit = strings.TrimSpace(explicit); explicit != "" {
+		return explicit
+	}
+	snapCommon := os.Getenv("SNAP_COMMON")
+	candidates := []string{}
+	if snapCommon != "" {
+		candidates = append(candidates, filepath.Join(snapCommon, "mariadb", "root_password"))
+	}
+	candidates = append(candidates,
+		"/var/snap/vybench/common/mariadb/root_password",
+		filepath.Join(benchPath, "config", "mariadb_root_password"),
+	)
+	for _, p := range candidates {
+		if data, err := os.ReadFile(p); err == nil {
+			if pw := strings.TrimSpace(string(data)); pw != "" {
+				return pw
+			}
+		}
+		if runtime.GOOS == "linux" && os.Geteuid() == 0 {
+			if out, err := exec.Command("setpriv", "--reuid=snap_daemon", "--regid=snap_daemon", "--clear-groups", "cat", p).Output(); err == nil {
+				if pw := strings.TrimSpace(string(out)); pw != "" {
+					return pw
+				}
+			}
+		}
+	}
+	for _, credFile := range []string{
+		"/root/.vybench_credentials",
+		filepath.Join(os.Getenv("HOME"), ".vybench_credentials"),
+	} {
+		if data, err := os.ReadFile(credFile); err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				if strings.HasPrefix(line, "MariaDB Root Password:") {
+					parts := strings.SplitN(line, ":", 2)
+					if len(parts) == 2 && strings.TrimSpace(parts[1]) != "" {
+						return strings.TrimSpace(parts[1])
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func resolveMariaDBSocket(benchPath string) string {
+	snapCommon := os.Getenv("SNAP_COMMON")
+	candidates := []string{}
+	if snapCommon != "" {
+		candidates = append(candidates, filepath.Join(snapCommon, "run", "mysql.sock"))
+	}
+	candidates = append(candidates,
+		"/var/snap/vybench/common/run/mysql.sock",
+	)
+	for _, p := range candidates {
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			return p
+		}
+	}
+	cfgPath := commonConfigPath(benchPath)
+	if cfg, err := readConfig(cfgPath); err == nil {
+		if v, ok := cfg["db_socket"]; ok {
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
+			}
+		}
+	}
+	return ""
+}
+
+type AddDomainOptions struct {
+	Site              string
+	Domain            string
+	SSLCertificate    string
+	SSLCertificateKey string
+}
+
+func ValidateDomainName(domain string) error {
+	if domain == "" {
+		return errors.New("domain cannot be empty")
+	}
+	if strings.ContainsAny(domain, " /\\") {
+		return errors.New("domain cannot contain spaces or path separators")
+	}
+	if !siteNamePattern.MatchString(domain) {
+		return fmt.Errorf("invalid domain name %q: use a valid lowercase domain format", domain)
+	}
+	return nil
+}
+
+func SiteDomains(benchPath, site string) []string {
+	data, err := os.ReadFile(filepath.Join(benchPath, "sites", site, "site_config.json"))
+	if err != nil {
+		return nil
+	}
+	var config struct {
+		Domains []interface{} `json:"domains"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil
+	}
+	var out []string
+	for _, v := range config.Domains {
+		switch d := v.(type) {
+		case string:
+			out = append(out, d)
+		case map[string]interface{}:
+			if ds, ok := d["domain"].(string); ok {
+				out = append(out, ds)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func AddDomainSpec(benchPath string, opts AddDomainOptions) (JobSpec, error) {
+	opts.Site = strings.TrimSpace(opts.Site)
+	opts.Domain = strings.TrimSpace(opts.Domain)
+	if err := ValidateSiteName(opts.Site); err != nil {
+		return JobSpec{}, err
+	}
+	if err := ValidateDomainName(opts.Domain); err != nil {
+		return JobSpec{}, err
+	}
+	args := []string{"setup", "add-domain", opts.Domain, "--site", opts.Site}
+	if opts.SSLCertificate != "" {
+		args = append(args, "--ssl-certificate", opts.SSLCertificate)
+	}
+	if opts.SSLCertificateKey != "" {
+		args = append(args, "--ssl-certificate-key", opts.SSLCertificateKey)
+	}
+
+	cmd, err := BenchCommand(benchPath, args...)
+	if err != nil {
+		return JobSpec{}, err
+	}
+	label := fmt.Sprintf("Adding custom domain %s to %s", opts.Domain, opts.Site)
+	return JobSpec{Steps: []Step{{Label: label, Cmd: cmd}}}, nil
 }

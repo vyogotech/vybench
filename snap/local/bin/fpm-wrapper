@@ -6,32 +6,203 @@
 # to the caller to get right.
 set -euo pipefail
 
+DAEMON_USER="snap_daemon"
+if [ -n "${SNAP:-}" ] && [ -f "$SNAP/bin/snap-common.sh" ]; then
+  . "$SNAP/bin/snap-common.sh"
+fi
+
+# fpm keeps its store and repository configuration in $HOME/.fpm. Under strict
+# confinement $HOME is the snap's own writable area, so the store survives across
+# revisions. Under strict snap confinement, $SNAP_COMMON is accessible to daemons
+# and users alike.
+export HOME="${SNAP_COMMON:-$HOME}"
+
+# fpm ships with no repository at all, so without this every install ends in
+# "no repositories configured. Use 'fpm repo add'".
+if [ ! -f "$HOME/.fpm/config.json" ] || ! grep -q "fpm.vyogo.tech" "$HOME/.fpm/config.json" 2>/dev/null; then
+  mkdir -p "$HOME/.fpm"
+  cat > "$HOME/.fpm/config.json" <<'EOF'
+{
+  "repositories": {
+    "vyogo": {
+      "name": "vyogo",
+      "url": "https://fpm.vyogo.tech",
+      "priority": 0
+    }
+  }
+}
+EOF
+fi
+
+# The store is written by fpm, which always runs as snap_daemon (see run_fpm),
+# and read by the TUI, which runs as whoever typed the command. So: owned by
+# snap_daemon, group-writable, world-readable. Not 0777 -- a world-writable
+# package store lets any local account swap out the code the services import.
+#
+# Scoped to the directory and the config file, not the whole store: the store
+# holds every downloaded app, and recursing it on each `fpm` call would be
+# hundreds of megabytes of pointless I/O. fpm creates its own files under the
+# umask 002 that snap-common.sh sets, which already makes them group-writable.
+#
+# The chmods go through as_daemon because the store belongs to snap_daemon and
+# root inside a strict snap has no DAC override: run as root they fail with
+# EPERM and, being `|| true`, say nothing -- which is how the store came to sit
+# at 0777 in the first place.
+if [ -d "$HOME/.fpm" ]; then
+  if [ "$(id -u)" = "0" ] && [ -n "${DAEMON_USER:-}" ]; then
+    chown "$DAEMON_USER:$DAEMON_USER" "$HOME/.fpm" "$HOME/.fpm/config.json" 2>/dev/null || true
+  fi
+  if command -v as_daemon >/dev/null 2>&1; then
+    as_daemon chmod 0775 "$HOME/.fpm" 2>/dev/null || true
+    [ -f "$HOME/.fpm/config.json" ] && { as_daemon chmod 0664 "$HOME/.fpm/config.json" 2>/dev/null || true; }
+  else
+    chmod 0775 "$HOME/.fpm" 2>/dev/null || true
+    [ -f "$HOME/.fpm/config.json" ] && { chmod 0664 "$HOME/.fpm/config.json" 2>/dev/null || true; }
+  fi
+fi
+
 BENCH="${VYBENCH_BENCH:-}"
 [ -z "$BENCH" ] && [ -L "$SNAP_COMMON/current-bench" ] && BENCH="$(readlink -f "$SNAP_COMMON/current-bench")"
 [ -z "$BENCH" ] && BENCH="$SNAP_COMMON/bench"
+
+# Dynamic FPM resolution: prefer writable dynamic binary in SNAP_COMMON or SNAP_USER_COMMON
+FPM_BIN="$SNAP/usr/bin/fpm"
+if [ -x "$SNAP_COMMON/bin/fpm" ]; then
+  FPM_BIN="$SNAP_COMMON/bin/fpm"
+elif [ -n "${SNAP_USER_COMMON:-}" ] && [ -x "$SNAP_USER_COMMON/bin/fpm" ]; then
+  FPM_BIN="$SNAP_USER_COMMON/bin/fpm"
+fi
+
+# Subcommand: update / self-update fetches the latest FPM binary from GitHub
+if [ "${1:-}" = "update" ] || [ "${1:-}" = "self-update" ]; then
+  echo "vybench.fpm: Checking for latest FPM release..."
+  ARCH="$(uname -m)"
+  case "$ARCH" in
+    x86_64) ARCH="amd64" ;;
+    aarch64|arm64) ARCH="arm64" ;;
+    *) echo "vybench.fpm: unsupported architecture $ARCH" >&2; exit 1 ;;
+  esac
+  OS="linux"
+
+  LATEST_TAG=$(curl -sSL "https://api.github.com/repos/vyogotech/fpm/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
+  if [ -z "$LATEST_TAG" ]; then
+    echo "vybench.fpm: error: could not fetch latest release from GitHub" >&2
+    exit 1
+  fi
+
+  TARGET_DIR="$SNAP_COMMON/bin"
+  if [ ! -w "$SNAP_COMMON" ] && [ -n "${SNAP_USER_COMMON:-}" ]; then
+    TARGET_DIR="$SNAP_USER_COMMON/bin"
+  fi
+  mkdir -p "$TARGET_DIR"
+
+  URL="https://github.com/vyogotech/fpm/releases/download/$LATEST_TAG/fpm-$OS-$ARCH"
+  echo "vybench.fpm: Downloading FPM $LATEST_TAG ($OS-$ARCH)..."
+  TMP="$TARGET_DIR/fpm.tmp.$$"
+  if ! curl -sSL -f -o "$TMP" "$URL"; then
+    echo "vybench.fpm: error: download failed from $URL" >&2
+    rm -f "$TMP"
+    exit 1
+  fi
+  chmod 0755 "$TMP"
+  mv -f "$TMP" "$TARGET_DIR/fpm"
+  if [ -n "${DAEMON_USER:-}" ]; then
+    chown -R "$DAEMON_USER:$DAEMON_USER" "$TARGET_DIR" 2>/dev/null || true
+  fi
+  echo "vybench.fpm: Successfully installed FPM $LATEST_TAG to $TARGET_DIR/fpm"
+  exit 0
+fi
+
+# Helper to execute FPM as snap_daemon when invoked by root under snap confinement
+run_fpm() {
+  if [ "$(id -u)" = "0" ] && [ -n "${DAEMON_USER:-}" ] && [ -n "${SNAP:-}" ]; then
+    exec setpriv --reuid="$DAEMON_USER" --regid="$DAEMON_USER" --clear-groups "$@"
+  fi
+  exec "$@"
+}
+
+# The same thing without exec, so the caller can try again.
+run_fpm_once() {
+  if [ "$(id -u)" = "0" ] && [ -n "${DAEMON_USER:-}" ] && [ -n "${SNAP:-}" ]; then
+    setpriv --reuid="$DAEMON_USER" --regid="$DAEMON_USER" --clear-groups "$@"
+    return $?
+  fi
+  "$@"
+}
+
+# The registry is behind Cloudflare, and on some paths -- a DigitalOcean droplet
+# in sgp1 whose traffic Cloudflare answers from Sao Paulo is the case this was
+# written for -- most requests get a TCP connection and then no answer at all.
+# A request that is going to succeed answers in a second or two, so the fix is
+# to stop waiting and ask again rather than to wait longer. fpm has no retry of
+# its own; without this an install fails four times in five for reasons that
+# have nothing to do with the package.
+FPM_RETRIES="${VYBENCH_FPM_RETRIES:-4}"
+FPM_NETWORK_FAILURE='TLS handshake timeout|context deadline exceeded|i/o timeout|connection reset|connection refused|no such host|EOF|Failed to fetch metadata|network is unreachable|temporary failure in name resolution|timeout awaiting|server misbehaving|502 Bad Gateway|503 Service|504 Gateway'
+
+run_fpm_retrying() {
+  local log attempt status
+  if ! log="$(mktemp "${TMPDIR:-/tmp}/vybench-fpm.XXXXXX" 2>/dev/null)"; then
+    run_fpm_once "$@"   # nowhere to keep the output, so nothing to match on
+    return $?
+  fi
+  attempt=1
+  while : ; do
+    set +e
+    run_fpm_once "$@" 2>&1 | tee "$log"
+    status="${PIPESTATUS[0]}"
+    set -e
+    if [ "$status" -eq 0 ] || [ "$attempt" -ge "$FPM_RETRIES" ] ||
+       ! grep -qiE "$FPM_NETWORK_FAILURE" "$log"; then
+      rm -f "$log"
+      return "$status"
+    fi
+    attempt=$((attempt + 1))
+    echo "vybench: the package registry did not answer; retrying ($attempt/$FPM_RETRIES)..." >&2
+    sleep 1
+  done
+}
+
+# Commands that reach the registry get the retry loop; the rest exec straight
+# through, so that `fpm` in a pipeline behaves exactly as it did.
+exec_or_retry() {
+  local status=0
+  case "${2:-}" in
+    install|deps|bundle|search|get-app|exists|publish|mirror)
+      run_fpm_retrying "$@" || status=$?
+      exit "$status"
+      ;;
+  esac
+  run_fpm "$@"
+}
+
+# Informational flags and subcommands that don't need a bench
+case "${1:-}" in
+  --help|-h|help|--version|-v|version|repo)
+    run_fpm "$FPM_BIN" "$@"
+    ;;
+esac
 
 if [ ! -d "$BENCH/sites" ]; then
   echo "vybench: no bench at $BENCH yet — start it once (snap start vybench) before installing apps." >&2
   exit 1
 fi
 
-# fpm keeps its store and repository configuration in $HOME/.fpm. Under strict
-# confinement $HOME is the snap's own writable area, so the store survives across
-# invocations and is not shared with the user's own fpm, which would be surprising.
-export HOME="${SNAP_USER_COMMON:-$SNAP_COMMON}"
+# Always change directory to the bench so unprivileged execution doesn't fail on restricted CWD
+cd "$BENCH"
 
 # --bench-path is supplied unless the caller named one, so `vybench.fpm install
 # frappe/crm==1.82.0` does the obvious thing.
 for arg in "$@"; do
   case "$arg" in
-    --bench-path|--bench-path=*) exec "$SNAP/usr/bin/fpm" "$@" ;;
+    --bench-path|--bench-path=*) exec_or_retry "$FPM_BIN" "$@" ;;
   esac
 done
 
 case "${1:-}" in
   install|deps|bundle)
-    exec "$SNAP/usr/bin/fpm" "$@" --bench-path "$BENCH"
+    exec_or_retry "$FPM_BIN" "$@" --bench-path "$BENCH"
     ;;
 esac
 
-exec "$SNAP/usr/bin/fpm" "$@"
+exec_or_retry "$FPM_BIN" "$@"

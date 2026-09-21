@@ -19,7 +19,7 @@ func detach(cmd *exec.Cmd) {
 // terminate sends SIGTERM to cmd's process group, then SIGKILL if it is still
 // around a few seconds later.
 func terminate(cmd *exec.Cmd) {
-	if cmd.Process == nil {
+	if cmd == nil || cmd.Process == nil {
 		return
 	}
 	pgid := -cmd.Process.Pid

@@ -18,10 +18,11 @@ if [ -x "$TUI_BIN" ]; then
   # These names never reach frappe's bench: its own `bench drop` deletes a
   # bench directory.
   if [ "${1:-}" = "bench" ]; then
-    case "${2:-}" in list|current|switch|new|attach|drop) shift ;; esac
+    case "${2:-}" in list|current|switch|new|attach|drop|doctor) shift ;; esac
   fi
   case "${1:-}" in
     list|current|switch|new|attach|drop) exec "$TUI_BIN" bench "$@" ;;
+    doctor) exec "$TUI_BIN" "$@" ;;
   esac
 fi
 
@@ -36,10 +37,27 @@ require_bench_access "$@" || exit 1
 
 bootstrap_common
 
-# Outside a bench, run against the active one. `bench init` creates a new
-# bench at the path it is given, so it must not run from inside another.
-if [ "${1:-}" != "init" ] && [ ! -f "Procfile" ] && [ ! -d "sites" ]; then
-  cd "$LIVE_BENCH"
+# Run against LIVE_BENCH, always -- not only when the current directory does not
+# look like a bench. snap-common.sh already resolves LIVE_BENCH to the current
+# directory when that directory IS a bench, so this is a no-op in the ordinary
+# case; what it fixes is the case where it is not.
+#
+# run_as_daemon drops to snap_daemon with setpriv, which keeps the working
+# directory. A command started somewhere snap_daemon cannot enter -- /root is
+# mode 0700, and root inside a strict snap has no DAC override -- therefore
+# reaches bench with a working directory it cannot stat. bench's
+# is_bench_directory() fails, it never loads frappe's subcommands, and the user
+# sees "WARN: Command not being executed in bench directory" followed by
+# "No such command 'new-site'".
+#
+# `bench init` is the exception: it creates a bench at the path it is given and
+# must not run from inside another one.
+if [ "${1:-}" != "init" ]; then
+  if ! cd "$LIVE_BENCH" 2>/dev/null; then
+    echo "$SNAP_NAME: cannot enter the bench at $LIVE_BENCH." >&2
+    echo "Check that it exists and is readable by $(id -un): vybench.bench doctor" >&2
+    exit 1
+  fi
 fi
 
 # Normally this already runs as the invoking host user and run_as_daemon is a

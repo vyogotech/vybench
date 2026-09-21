@@ -54,6 +54,22 @@ func TestQuickSiteCheck(t *testing.T) {
 	if _, ok := QuickSiteCheck(bench, "b"); ok {
 		t.Error("a site with a db_name needs the database to decide")
 	}
+	writeFile(t, filepath.Join(bench, "sites", "c", "site_config.json"), `{"db_name": "_c", "installed_apps": ["frappe", "erpnext"]}`)
+	if c, ok := QuickSiteCheck(bench, "c"); !ok || c.State != SiteHealthy || c.Reason != "frappe is installed" || !slices.Equal(c.Apps, []string{"frappe", "erpnext"}) {
+		t.Errorf("installed_apps not parsed: %+v %v", c, ok)
+	}
+	writeFile(t, filepath.Join(bench, "sites", "d", "site_config.json"), `{"db_name": "_d", "installed_apps": []}`)
+	if _, ok := QuickSiteCheck(bench, "d"); ok {
+		t.Error("empty installed_apps needs the database to decide")
+	}
+	writeFile(t, filepath.Join(bench, "sites", "e", "site_config.json"), `{"db_name": "_e", "installed_apps": [123]}`)
+	if _, ok := QuickSiteCheck(bench, "e"); ok {
+		t.Error("invalid installed_apps types needs the database to decide")
+	}
+	writeFile(t, filepath.Join(bench, "sites", "bad", "site_config.json"), `{bad json`)
+	if c, ok := QuickSiteCheck(bench, "bad"); !ok || c.State != SiteUnknown {
+		t.Errorf("bad json: %+v %v", c, ok)
+	}
 }
 
 // CheckSite end to end, through a stand-in for the vybench CLI.

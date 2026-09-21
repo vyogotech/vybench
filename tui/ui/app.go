@@ -118,6 +118,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Keep this session, and every command it starts, on the chosen bench
 		// even when it was launched pinned to another one.
 		_ = os.Setenv("VYBENCH_BENCH", msg.Bench.Path)
+
+	case views.SwitchToMarketplaceMsg:
+		a.market.SetTargetSite(msg.TargetSite)
+		m, cmd := a.setTab(TabMarketplace)
+		a = m.(App)
+		status := statusCmd(fmt.Sprintf("Select an app to install on '%s'. Press [i] to install.", msg.TargetSite), false)
+		return a, tea.Batch(cmd, status)
 	}
 	return a.broadcast(msg)
 }

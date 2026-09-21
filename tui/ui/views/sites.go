@@ -157,6 +157,8 @@ func (f *siteForm) fields() []int {
 	}
 	if f.engine == "postgres" {
 		fs = append(fs, fieldRootUser, fieldRootPW)
+	} else if f.engine == "mariadb" {
+		fs = append(fs, fieldRootPW)
 	}
 	if f.exists {
 		fs = append(fs, fieldForce)
@@ -273,6 +275,63 @@ type installDialog struct {
 
 func (d *installDialog) isInstalled(app string) bool { return slices.Contains(d.installed, app) }
 
+func (d *installDialog) allInstalled() bool {
+	if len(d.apps) == 0 {
+		return true
+	}
+	for _, a := range d.apps {
+		if !d.isInstalled(a) {
+			return false
+		}
+	}
+	return true
+}
+
+// ── Add domain dialog ───────────────────────────────────────────────────────
+
+type domainDialog struct {
+	site   string
+	domain textinput.Model
+	cert   textinput.Model
+	key    textinput.Model
+	focus  int
+	err    string
+}
+
+func (d *domainDialog) fields() []int {
+	return []int{0, 1, 2}
+}
+
+func (d *domainDialog) setFocus(id int) {
+	d.focus = id
+	for _, x := range []struct {
+		id int
+		in *textinput.Model
+	}{{0, &d.domain}, {1, &d.cert}, {2, &d.key}} {
+		if x.id == id {
+			x.in.Focus()
+		} else {
+			x.in.Blur()
+		}
+	}
+}
+
+func (d *domainDialog) input() *textinput.Model {
+	switch d.focus {
+	case 0:
+		return &d.domain
+	case 1:
+		return &d.cert
+	case 2:
+		return &d.key
+	}
+	return nil
+}
+
+func (d *domainDialog) move(delta int) {
+	d.setFocus(min(max(d.focus+delta, 0), 2))
+}
+
 // ── Restore dialog ──────────────────────────────────────────────────────────
 
 const (
@@ -331,6 +390,8 @@ func (r *restoreDialog) fields() []int {
 	fs = append(fs, rForce)
 	if r.engine == "postgres" {
 		fs = append(fs, rRootUser, rRootPW)
+	} else if r.engine == "mariadb" {
+		fs = append(fs, rRootPW)
 	}
 	return fs
 }
@@ -399,6 +460,7 @@ type SitesModel struct {
 	drop    *dropDialog
 	restore *restoreDialog
 	install *installDialog
+	domain  *domainDialog
 }
 
 // NewSitesModel creates the view for bench. mgr supplies the other benches a
@@ -453,7 +515,7 @@ func (m *SitesModel) scan() tea.Cmd {
 
 // CapturingInput reports whether a dialog owns the keyboard.
 func (m SitesModel) CapturingInput() bool {
-	return m.form != nil || m.drop != nil || m.restore != nil || m.install != nil
+	return m.form != nil || m.drop != nil || m.restore != nil || m.install != nil || m.domain != nil
 }
 
 // SetSize sets the content area.
@@ -499,7 +561,7 @@ func (m SitesModel) Update(msg tea.Msg) (SitesModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case BenchSwitchedMsg:
 		m.bench = msg.Bench
-		m.form, m.drop, m.restore, m.install = nil, nil, nil, nil
+		m.form, m.drop, m.restore, m.install, m.domain = nil, nil, nil, nil, nil
 		m.failed = map[string]bool{}
 		m.siteApps = map[string][]string{}
 		m.reload()
@@ -621,6 +683,8 @@ func (m SitesModel) Update(msg tea.Msg) (SitesModel, tea.Cmd) {
 			return m.updateRestore(msg)
 		case m.install != nil:
 			return m.updateInstall(msg)
+		case m.domain != nil:
+			return m.updateDomain(msg)
 		}
 		if m.nav.key(msg.String(), len(m.sites), m.listRows()) {
 			return m, nil
@@ -653,11 +717,17 @@ func (m SitesModel) Update(msg tea.Msg) (SitesModel, tea.Cmd) {
 			return m, m.openRestore(site)
 		case "a":
 			if ok {
-				return m, m.openInstall(site)
+				return m, func() tea.Msg {
+					return SwitchToMarketplaceMsg{TargetSite: site}
+				}
 			}
 		case "d":
 			if ok {
 				return m, m.openDrop(site)
+			}
+		case "D", "c":
+			if ok {
+				return m, m.openDomain(site)
 			}
 		}
 	}
@@ -874,8 +944,14 @@ func (m SitesModel) updateDrop(msg tea.KeyMsg) (SitesModel, tea.Cmd) {
 
 func (m *SitesModel) openInstall(site string) tea.Cmd {
 	d := &installDialog{site: site, engine: engineOr(m.dbTypes[site]), apps: core.BenchAppNames(m.bench.Path), installed: m.siteApps[site]}
-	if c, ok := core.QuickSiteCheck(m.bench.Path, site); ok && c.State == core.SiteIncomplete {
-		d.unfinished = c.Reason
+	if c, ok := core.QuickSiteCheck(m.bench.Path, site); ok {
+		if c.State == core.SiteIncomplete {
+			d.unfinished = c.Reason
+		}
+		if c.State == core.SiteHealthy && len(c.Apps) > 0 {
+			d.installed = c.Apps
+			m.siteApps[site] = c.Apps
+		}
 	}
 	for i, a := range d.apps { // start on the first app not installed yet
 		if !d.isInstalled(a) {
@@ -907,9 +983,12 @@ func (m SitesModel) updateInstall(msg tea.KeyMsg) (SitesModel, tea.Cmd) {
 		d.at = min(d.at+1, max(len(d.apps)-1, 0))
 		d.err = ""
 	case "enter":
-		if len(d.apps) == 0 {
+		if d.allInstalled() || len(d.apps) == 0 {
+			target := d.site
 			m.install = nil
-			return m, nil
+			return m, func() tea.Msg {
+				return SwitchToMarketplaceMsg{TargetSite: target}
+			}
 		}
 		app := d.apps[d.at]
 		switch {
@@ -1054,7 +1133,7 @@ func (m SitesModel) submitRestore() (SitesModel, tea.Cmd) {
 func (m SitesModel) View(w, h int) string {
 	out := lipgloss.JoinVertical(lipgloss.Left,
 		panel(w, h-1, m.renderList(w-2, h-3)),
-		helpBar(w, "n", "new site", "a", "add app", "o", "open", "B", "backup", "R", "restore", "d", "drop", "r", "reload"),
+		helpBar(w, "n", "new site", "a", "add app", "o", "open", "B", "backup", "R", "restore", "d", "drop", "D", "domain", "r", "reload"),
 	)
 	switch {
 	case m.form != nil:
@@ -1065,6 +1144,8 @@ func (m SitesModel) View(w, h int) string {
 		return overlay(out, m.renderRestore(), w, h)
 	case m.install != nil:
 		return overlay(out, m.renderInstall(), w, h)
+	case m.domain != nil:
+		return overlay(out, m.renderDomain(), w, h)
 	}
 	return out
 }
@@ -1105,6 +1186,9 @@ func (m SitesModel) renderList(w, h int) string {
 	}
 	if site, ok := m.selected(); ok {
 		hint := fmt.Sprintf("  http://%s:%d", site, m.port)
+		if domains := core.SiteDomains(m.bench.Path, site); len(domains) > 0 {
+			hint += " · domains: " + strings.Join(domains, ", ")
+		}
 		if apps := m.siteApps[site]; len(apps) > 0 {
 			hint += " · apps: " + strings.Join(apps, ", ")
 		}
@@ -1150,6 +1234,10 @@ func (m SitesModel) renderForm() string {
 		rows = append(rows,
 			formRow(f.focus == fieldRootUser, "PG superuser", f.rootUser.View()),
 			formRow(f.focus == fieldRootPW, "PG password", f.rootPW.View()),
+		)
+	} else if f.engine == "mariadb" {
+		rows = append(rows,
+			formRow(f.focus == fieldRootPW, "DB root PW", f.rootPW.View()),
 		)
 	}
 	if f.exists {
@@ -1251,10 +1339,30 @@ func (m SitesModel) renderDrop() string {
 
 func (m SitesModel) renderInstall() string {
 	d := m.install
+	if d.installed == nil {
+		if c, ok := core.QuickSiteCheck(m.bench.Path, d.site); ok && c.State == core.SiteHealthy && len(c.Apps) > 0 {
+			d.installed = c.Apps
+		}
+	}
 	var rows []string
 	if d.unfinished != "" {
 		rows = append(rows, theme.StyleBadgeWarn.Render("⚠ This site did not finish installing ("+d.unfinished+")."),
 			theme.StyleMuted.Render("Create it again with [n]; ticked apps are installed with it."), "")
+	}
+	if d.allInstalled() {
+		rows = append(rows,
+			fmt.Sprintf("All local bench apps are installed on %s.", d.site),
+			"",
+			theme.StylePrimary.Render("[Enter] Browse Marketplace to install new apps"),
+		)
+		rows = append(rows, "")
+		rows = append(rows, dbRows(d.db, d.dbWhy, d.engine)...)
+		rows = append(rows, theme.StyleMuted.Render("Apps not in this bench: [3] Marketplace installs them."))
+		if d.err != "" {
+			rows = append(rows, "", errorText(d.err))
+		}
+		return dialog("Install App on "+d.site, rows,
+			theme.StylePrimary.Render("[Enter] Marketplace")+theme.StyleMuted.Render("  [Esc] Cancel"))
 	}
 	if len(d.apps) == 0 {
 		rows = append(rows, theme.StyleMuted.Render("This bench has no apps besides frappe."))
@@ -1322,12 +1430,24 @@ func (m SitesModel) renderRestore() string {
 			formRow(r.focus == rRootUser, "PG superuser", r.rootUser.View()),
 			formRow(r.focus == rRootPW, "PG password", r.rootPW.View()),
 		)
+	} else if r.engine == "mariadb" {
+		rows = append(rows,
+			formRow(r.focus == rRootPW, "DB root PW", r.rootPW.View()),
+		)
 	}
 	if r.err != "" {
 		rows = append(rows, "", errorText(r.err))
 	}
-	return dialog("Restore Backup", rows,
-		theme.StylePrimary.Render("[Enter] Restore")+theme.StyleMuted.Render("  [Tab] Fields  [←→] Choose  [Esc] Cancel"))
+	// Enter only submits on the last field (see updateRestore); everywhere else
+	// it moves on. Labelling it "Restore" throughout, for an action that
+	// replaces every row in a site, made the dialog read as though the first
+	// Enter would go through -- the new-site form gets this right.
+	fs := r.fields()
+	keys := theme.StyleMuted.Render("[Tab/Enter] Next  [←→] Choose  [Space] Toggle  [Shift+Tab] Back  [Esc] Cancel")
+	if r.focus == fs[len(fs)-1] {
+		keys = theme.StylePrimary.Render("[Enter] Restore") + theme.StyleMuted.Render("  [Tab] Fields  [Esc] Cancel")
+	}
+	return dialog("Restore Backup", rows, keys)
 }
 
 // engineChoice renders the MariaDB / PostgreSQL toggle.
@@ -1340,3 +1460,95 @@ func engineChoice(engine string) string {
 	}
 	return maria.Render("[M] MariaDB") + "  " + pg.Render("[P] PostgreSQL")
 }
+
+// ── Domain ──────────────────────────────────────────────────────────────────
+
+func (m *SitesModel) openDomain(site string) tea.Cmd {
+	d := &domainDialog{
+		site:   site,
+		domain: newInput("custom.example.com", 253, false),
+		cert:   newInput("/path/to/cert.pem (optional)", 1024, false),
+		key:    newInput("/path/to/key.pem (optional)", 1024, false),
+	}
+	d.domain.Focus()
+	m.domain = d
+	return nil
+}
+
+func (m SitesModel) updateDomain(msg tea.KeyMsg) (SitesModel, tea.Cmd) {
+	d := m.domain
+	switch msg.String() {
+	case "esc":
+		m.domain = nil
+		return m, nil
+	case "tab", "down":
+		d.move(1)
+		return m, nil
+	case "shift+tab", "up":
+		d.move(-1)
+		return m, nil
+	case "enter":
+		if d.focus != 2 {
+			d.move(1)
+			return m, nil
+		}
+		domain := strings.TrimSpace(d.domain.Value())
+		if err := core.ValidateDomainName(domain); err != nil {
+			d.err = err.Error()
+			return m, nil
+		}
+		existing := core.SiteDomains(m.bench.Path, d.site)
+		if slices.Contains(existing, domain) {
+			d.err = domain + " is already registered on " + d.site
+			return m, nil
+		}
+		opts := core.AddDomainOptions{
+			Site:              d.site,
+			Domain:            domain,
+			SSLCertificate:    strings.TrimSpace(d.cert.Value()),
+			SSLCertificateKey: strings.TrimSpace(d.key.Value()),
+		}
+		spec, err := core.AddDomainSpec(m.bench.Path, opts)
+		if err != nil {
+			d.err = err.Error()
+			return m, nil
+		}
+		m.domain = nil
+		return m, emit(RunJobMsg{
+			Title:   "Add domain " + domain + " to " + d.site,
+			Spec:    spec,
+			Success: "Added custom domain " + domain + " to " + d.site,
+			After:   []tea.Msg{SitesChangedMsg{}},
+		})
+	}
+	if in := d.input(); in != nil {
+		var cmd tea.Cmd
+		*in, cmd = in.Update(msg)
+		d.err = ""
+		return m, cmd
+	}
+	return m, nil
+}
+
+func (m SitesModel) renderDomain() string {
+	d := m.domain
+	rows := []string{
+		"Site: " + theme.StyleBold.Render(d.site),
+	}
+	existing := core.SiteDomains(m.bench.Path, d.site)
+	if len(existing) > 0 {
+		rows = append(rows, "Registered domains: "+strings.Join(existing, ", "))
+	}
+	rows = append(rows,
+		"",
+		formRow(d.focus == 0, "Domain", d.domain.View()),
+		formRow(d.focus == 1, "SSL Cert", d.cert.View()),
+		formRow(d.focus == 2, "SSL Key", d.key.View()),
+	)
+	if d.err != "" {
+		rows = append(rows, "", errorText(d.err))
+	}
+	return dialog("Add Custom Domain to "+d.site, rows,
+		theme.StylePrimary.Render("[Enter] Submit")+theme.StyleMuted.Render("  [Tab] Fields  [Esc] Cancel"))
+}
+

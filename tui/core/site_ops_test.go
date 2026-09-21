@@ -68,3 +68,131 @@ func TestAppHelpers(t *testing.T) {
 		t.Errorf("install-app args %v", a)
 	}
 }
+
+func TestMariaDBRootPasswordResolution(t *testing.T) {
+	fakeCLI(t)
+	bench := t.TempDir()
+	writeFile(t, bench+"/config/mariadb_root_password", "secret_mariadb_pw")
+	writeFile(t, bench+"/sites/common_site_config.json", `{"db_socket": "/run/test.sock"}`)
+
+	spec, err := NewSiteSpec(bench, NewSiteOptions{Name: "mariadb.localhost", AdminPassword: "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := spec.Steps[0].Cmd.Args
+	if !slices.Contains(args, "--mariadb-root-password") || args[slices.Index(args, "--mariadb-root-password")+1] != "secret_mariadb_pw" {
+		t.Errorf("expected --mariadb-root-password secret_mariadb_pw, got %v", args)
+	}
+	if !slices.Contains(args, "--db-socket") || args[slices.Index(args, "--db-socket")+1] != "/run/test.sock" {
+		t.Errorf("expected --db-socket /run/test.sock, got %v", args)
+	}
+
+	dropSpec, err := DropSiteSpec(bench, "mariadb.localhost", false, SiteCheck{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dropArgs := dropSpec.Steps[0].Cmd.Args
+	if !slices.Contains(dropArgs, "--mariadb-root-password") || dropArgs[slices.Index(dropArgs, "--mariadb-root-password")+1] != "secret_mariadb_pw" {
+		t.Errorf("expected --mariadb-root-password in drop-site, got %v", dropArgs)
+	}
+}
+
+func TestValidateDomainName(t *testing.T) {
+	for _, ok := range []string{"example.com", "my-erp.example.co.uk", "sub.domain.localhost"} {
+		if err := ValidateDomainName(ok); err != nil {
+			t.Errorf("%q rejected: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", " ", "a b", "a/b", "A.com", "-a.com", "a..com", "a\\b"} {
+		if ValidateDomainName(bad) == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+func TestSiteDomains(t *testing.T) {
+	bench := t.TempDir()
+	
+	// Site with no domains
+	writeFile(t, bench+"/sites/empty.localhost/site_config.json", `{"db_name": "db1"}`)
+	if got := SiteDomains(bench, "empty.localhost"); len(got) != 0 {
+		t.Errorf("expected no domains, got %v", got)
+	}
+	
+	// Site with string domains and object domains
+	writeFile(t, bench+"/sites/dom.localhost/site_config.json", `{
+		"domains": [
+			"b.example.com",
+			{"domain": "a.example.com", "ssl_certificate": "cert"}
+		]
+	}`)
+	got := SiteDomains(bench, "dom.localhost")
+	if !slices.Equal(got, []string{"a.example.com", "b.example.com"}) {
+		t.Errorf("expected sorted domains, got %v", got)
+	}
+
+	// Missing site_config.json
+	if got := SiteDomains(bench, "missing.localhost"); len(got) != 0 {
+		t.Errorf("expected no domains for missing config, got %v", got)
+	}
+}
+
+func TestAddDomainSpec(t *testing.T) {
+	fakeCLI(t)
+	bench := t.TempDir()
+
+	spec, err := AddDomainSpec(bench, AddDomainOptions{Site: "a.localhost", Domain: "b.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := spec.Steps[0].Cmd.Args
+	if !slices.Equal(args[len(args)-5:], []string{"setup", "add-domain", "b.com", "--site", "a.localhost"}) {
+		t.Errorf("basic args: %v", args)
+	}
+
+	spec, err = AddDomainSpec(bench, AddDomainOptions{Site: "a.localhost", Domain: "b.com", SSLCertificate: "/cert", SSLCertificateKey: "/key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args = spec.Steps[0].Cmd.Args
+	if !slices.Contains(args, "--ssl-certificate") || args[slices.Index(args, "--ssl-certificate")+1] != "/cert" {
+		t.Errorf("ssl cert missing: %v", args)
+	}
+	if !slices.Contains(args, "--ssl-certificate-key") || args[slices.Index(args, "--ssl-certificate-key")+1] != "/key" {
+		t.Errorf("ssl key missing: %v", args)
+	}
+
+	if _, err := AddDomainSpec(bench, AddDomainOptions{Site: "a.localhost", Domain: ""}); err == nil {
+		t.Error("expected error for empty domain")
+	}
+
+	if _, err := AddDomainSpec(bench, AddDomainOptions{Site: "", Domain: "b.com"}); err == nil {
+		t.Error("expected error for invalid site")
+	}
+}
+
+// bench restore rejects --db-socket (new-site accepts it), and it once shipped
+// anyway: every restore on the snap died with "No such option '--db-socket'"
+// after its safety backup had run. Pinned against a bench whose socket resolves,
+// because that is the only situation in which the flag was ever added.
+func TestRestoreSpecNeverPassesDBSocket(t *testing.T) {
+	fakeCLI(t)
+	bench := t.TempDir()
+	writeFile(t, bench+"/sites/common_site_config.json", `{"db_socket": "/run/test.sock"}`)
+	writeFile(t, bench+"/config/mariadb_root_password", "pw")
+	writeFile(t, bench+"/sites/a.localhost/site_config.json", `{"db_name":"_x"}`)
+	sql := bench + "/sites/a.localhost/private/backups/20260101_000000-a_localhost-database.sql.gz"
+	writeFile(t, sql, "x")
+
+	spec, err := RestoreSpec(bench, RestoreOptions{Site: "a.localhost", SQLPath: sql})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := spec.Steps[len(spec.Steps)-1].Cmd.Args
+	if slices.Contains(args, "--db-socket") {
+		t.Fatalf("bench restore has no --db-socket option, but it was passed: %v", args)
+	}
+	if !slices.Contains(args, "--mariadb-root-password") {
+		t.Fatalf("the root password must still be passed: %v", args)
+	}
+}
