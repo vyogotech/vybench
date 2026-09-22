@@ -19,7 +19,7 @@ class Vybench < Formula
   desc "Frappe Bench v16 & ERPNext v16 single-node server stack for macOS"
   homepage "https://github.com/vyogotech/vybench"
   url "https://github.com/vyogotech/homebrew-tap/releases/download/v16.0.0/vybench-16.0.0.tar.gz"
-  sha256 "bf38fda453f2838c930f8ae51effbd856183566dac568544bde1b1aefb5ad14e"
+  sha256 "eed7153221ca89181d58f0876c09874b458ca0aedac0596466cec44b6e1365af"
   license "GPL-3.0-only"
   head "https://github.com/vyogotech/vybench.git", branch: "main"
 
@@ -53,7 +53,7 @@ class Vybench < Formula
   # fpm installs prebuilt Frappe apps into a bench; the TUI's marketplace
   # drives it. Same tag as the snap's fpm part.
   resource "fpm" do
-    url "https://github.com/vyogotech/fpm/archive/refs/tags/v4.2.0.tar.gz"
+    url "https://github.com/vyogotech/vybench/archive/refs/tags/v16.0.1.tar.gz"
     sha256 "262f746fb52b9502dc76707f0394aad20cf6396e51685a03e1864bb96abad1d6"
   end
 
