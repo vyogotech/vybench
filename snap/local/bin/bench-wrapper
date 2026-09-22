@@ -23,6 +23,7 @@ if [ -x "$TUI_BIN" ]; then
   case "${1:-}" in
     list|current|switch|new|attach|drop) exec "$TUI_BIN" bench "$@" ;;
     doctor) exec "$TUI_BIN" "$@" ;;
+    fpm) shift; exec "$SNAP/bin/fpm-wrapper" "$@" ;;
   esac
 fi
 

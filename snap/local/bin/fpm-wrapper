@@ -178,12 +178,15 @@ exec_or_retry() {
 
 # Informational flags and subcommands that don't need a bench
 case "${1:-}" in
-  --help|-h|help|--version|-v|version|repo)
+  --help|-h|help|--version|-v|version|repo|repos)
     run_fpm "$FPM_BIN" "$@"
     ;;
 esac
 
-if [ ! -d "$BENCH/sites" ]; then
+# Root inside strict snap confinement loses DAC_OVERRIDE and cannot traverse
+# the 0770 bench directory, so check the directory itself (stat only, no
+# traversal) rather than a file inside it.
+if [ ! -d "$BENCH" ]; then
   echo "vybench: no bench at $BENCH yet — start it once (snap start vybench) before installing apps." >&2
   exit 1
 fi
