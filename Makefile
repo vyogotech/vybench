@@ -3,15 +3,14 @@ FRAPPE_BRANCH ?= version-16
 FRAPPE_APPS ?= erpnext
 VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
-.PHONY: help payload deb rpm snap snap-postgres snap-remote brew brew-audit brew-test brew-local-test brew-sha test drift-check validate-snap validate-snap-postgres tui tui-test
+.PHONY: help payload deb rpm snap snap-remote brew brew-audit brew-test brew-local-test brew-sha test drift-check validate-snap tui tui-test
 help:
 	@echo "tui          - build the TUI / multi-bench CLI into brew/bin/vybench-tui"
 	@echo "tui-test     - vet and test the TUI (race detector on)"
 	@echo "payload      - build the bench payload for DISTRO=$(DISTRO)"
 	@echo "deb          - build a .deb from the payload in dist/"
 	@echo "rpm          - build an .rpm from the payload in dist/"
-	@echo "snap         - build the MariaDB snap for the host arch (needs snapcraft; Linux only)"
-	@echo "snap-postgres - build the PostgreSQL develop snap for the host arch (needs snapcraft; Linux only)"
+	@echo "snap         - build the vybench snap for the host arch (needs snapcraft; Linux only)"
 	@echo "snap-remote  - build amd64 AND arm64 on Launchpad (source becomes public)"
 	@echo "brew         - install the Homebrew formula from source (macOS only)"
 	@echo "brew-audit   - run brew audit checks on the formula"
@@ -20,7 +19,6 @@ help:
 	@echo "test         - install the built package in a clean container and verify"
 	@echo "drift-check  - compare the vendored nginx template against upstream"
 	@echo "validate-snap - run pre-flight snap validation checks"
-	@echo "validate-snap-postgres - run pre-flight snap validation checks for postgres snap"
 
 # brew/bin/vybench finds the binary next to itself, so a checkout works
 # without installing anything. The output is gitignored.
@@ -78,10 +76,6 @@ brew-local-test:
 snap:
 	mkdir -p dist && snapcraft pack --output=dist/vybench_$(shell uname -m).snap
 
-snap-postgres:
-	cp snap/snapcraft.postgres.yaml snap/snapcraft.yaml
-	mkdir -p dist && snapcraft pack --output=dist/vybench-postgres_$(shell uname -m).snap
-
 # Builds every architecture in snapcraft.yaml's `platforms` on Canonical's
 # Launchpad build farm. This is how arm64 gets built without a GitHub Team plan
 # (arm64 runners are unavailable to private repos on Free) and without an arm64
@@ -107,7 +101,4 @@ drift-check:
 
 validate-snap:
 	./scripts/validate-snap.sh
-
-validate-snap-postgres:
-	./scripts/validate-snap.sh snap/snapcraft.postgres.yaml
 

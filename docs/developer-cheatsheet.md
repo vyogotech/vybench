@@ -130,7 +130,7 @@ vybench bench list
 
 ## Database Engines (MariaDB & PostgreSQL)
 
-Each bench and site chooses its engine. MariaDB ships with vybench. PostgreSQL needs a PostgreSQL 16 server on `127.0.0.1:5432`: `brew install postgresql@16 && brew services start postgresql@16` on macOS, or the separate `vypgbench` snap on Linux.
+Each bench and site chooses its engine. MariaDB ships with vybench. PostgreSQL needs a PostgreSQL 16 server on `127.0.0.1:5432`: `brew install postgresql@16 && brew services start postgresql@16` on macOS, or your distro's `postgresql` package on Linux — there is no separate PostgreSQL-flavoured snap.
 
 ```bash
 # MariaDB site (vybench supplies the root credentials)
@@ -149,9 +149,8 @@ vybench mysql
 # Or on Snap:
 vybench.mysql -u root -S /var/snap/vybench/common/run/mysql.sock
 
-# PostgreSQL client
-psql -h 127.0.0.1 -U postgres             # Homebrew postgresql@16
-vypgbench.psql -U postgres -h 127.0.0.1   # the vypgbench snap
+# PostgreSQL client: whatever's installed alongside the server
+psql -h 127.0.0.1 -U postgres             # Homebrew postgresql@16, or a distro package on Linux
 ```
 
 ---
@@ -180,7 +179,6 @@ sudo snap logs vybench.mariadb -n 50      # last 50 lines
 | Service | Role |
 | :--- | :--- |
 | `vybench.mariadb` | MariaDB database daemon |
-| `vypgbench.postgres` | PostgreSQL database daemon (the `vypgbench` snap, instead of MariaDB) |
 | `vybench.redis` | Cache + queue |
 | `vybench.web` | Gunicorn (production) / Bench serve (developer) |
 | `vybench.worker` | Background jobs (default queue) |

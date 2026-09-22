@@ -63,8 +63,6 @@ fi
 if python3 -c 'import yaml' 2>/dev/null; then
   try "snapcraft.yaml is valid YAML" \
       "python3 -c \"import yaml;yaml.safe_load(open('$ROOT/snap/snapcraft.yaml'))\""
-  try "snapcraft.postgres.yaml is valid YAML" \
-      "python3 -c \"import yaml;yaml.safe_load(open('$ROOT/snap/snapcraft.postgres.yaml'))\""
 else
   echo "  SKIP  snapcraft.yaml YAML check (PyYAML not installed)"
 fi

@@ -299,7 +299,7 @@ func postgresHint() string {
 	case core.PlatformBrew:
 		return "Install and start PostgreSQL before creating sites on this bench: brew install postgresql@16 && brew services start postgresql@16"
 	case core.PlatformSnap:
-		return "The vybench snap ships MariaDB only; PostgreSQL benches need the separate vypgbench snap or a PostgreSQL server on this port."
+		return "The vybench snap ships MariaDB only; point a postgres bench at a PostgreSQL 16 server reachable on 127.0.0.1:5432 (installed separately on this host)."
 	}
 	return "Install and start PostgreSQL 16 before creating sites on this bench."
 }

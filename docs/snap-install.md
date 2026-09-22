@@ -3,8 +3,10 @@
 A self-contained Frappe & ERPNext orchestration stack for any Linux distribution with `snapd`
 (Fedora, Ubuntu, Debian, Arch, RHEL). Python 3.14, MariaDB 11.8, Redis 7, Node.js 24, and
 Nginx are bundled directly inside the snap, with an interactive Terminal UI (`vybench.tui`),
-multi-bench management, and FPM app installation. The separate `vypgbench` snap is the same
-stack with PostgreSQL 16 in place of MariaDB.
+multi-bench management, and FPM app installation. Each bench and site chooses MariaDB
+(bundled) or PostgreSQL 16 (installed separately on the host, reachable on
+127.0.0.1:5432) — the same model as Homebrew's optional `postgresql@16` on macOS. There is
+no separate PostgreSQL-flavoured snap.
 
 Nothing is taken from the host, ensuring zero library conflicts and zero host OS pollution.
 
@@ -33,9 +35,10 @@ external drive, connect the one interface that is not automatic:
 sudo snap connect vybench:removable-media
 ```
 
-The install starts MariaDB (PostgreSQL in `vypgbench`) and Redis, generates a random database root
-passwords, and brings up the full application stack. No post-install step is
-required to get a working server.
+The install starts MariaDB and Redis, generates a random database root password, and brings
+up the full application stack. No post-install step is required to get a working server.
+A PostgreSQL-engine bench needs a PostgreSQL 16 server installed separately on the same
+host (see §5) — nothing extra to install for MariaDB benches.
 
 ---
 
@@ -141,31 +144,32 @@ jobs from different benches never mix.
 
 ## 5. Databases (MariaDB or PostgreSQL)
 
-The `vybench` snap runs **MariaDB 11.8**. The `vypgbench` snap is the same stack running
-**PostgreSQL 16** instead. The two are separate snaps; install the one whose database you want.
+The `vybench` snap bundles **MariaDB 11.8**. Each bench and site independently chooses
+MariaDB or PostgreSQL — there is no separate PostgreSQL-flavoured snap. A PostgreSQL bench
+talks to a PostgreSQL 16 server on the same host, reachable on `127.0.0.1:5432`, installed
+however you prefer (a distro package, a container, or your own build).
 
 ### Creating Sites
 
 ```bash
-# vybench snap: a MariaDB site
+# A MariaDB site (the bundled server, over its own UNIX socket)
 bench new-site maria.localhost --db-type mariadb --admin-password admin
 
-# vypgbench snap: a PostgreSQL site
-vypgbench.bench new-site pg.localhost --db-type postgres --admin-password admin
+# A PostgreSQL site (talks to a server on 127.0.0.1:5432)
+bench new-site pg.localhost --db-type postgres --admin-password admin \
+  --db-root-username postgres --db-root-password <postgres-root-password>
 ```
 
 ### Direct Database Client Tools
 
-Each snap ships the client tools for its own database:
-
 ```bash
-# MariaDB client
+# MariaDB client (bundled)
 vybench.mysql -u root -p -S /var/snap/vybench/common/run/mysql.sock
 
-# PostgreSQL client (vypgbench snap)
-vypgbench.psql -U postgres -h 127.0.0.1
-vypgbench.pg-dump -U postgres mydb > dump.sql
-vypgbench.pg-restore -U postgres -d mydb dump.sql
+# PostgreSQL client: use the one installed alongside your PostgreSQL server, e.g.
+psql -U postgres -h 127.0.0.1
+pg_dump -U postgres mydb > dump.sql
+pg_restore -U postgres -d mydb dump.sql
 ```
 
 ---
@@ -239,7 +243,6 @@ All runtime and persistent data lives in `/var/snap/vybench/common`:
 | `current-bench` | Symlink pointing to the currently active bench |
 | `bench/` | Default single-bench root (fully backward compatible) |
 | `mariadb/` | MariaDB database storage directory |
-| `postgres/` | PostgreSQL 16 database storage directory |
 | `run/mysql.sock` | MariaDB UNIX domain socket |
 | `bench/logs/` | Frappe's own logs for the default bench (each bench has its own `logs/`) |
 | `benches.json` | Registry of benches, next to `current-bench` |

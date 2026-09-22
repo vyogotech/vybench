@@ -9,7 +9,7 @@ Over the past few months, we've been working on **Vybench** — the universal de
 - 🖥️ **Interactive Terminal UI (`vybench tui`)**: Full-screen console with service status and controls, site management, log tailing, bench switching, and an app marketplace.
 - 🔀 **Multi-Bench Orchestration (`vybench bench`)**: Create, attach, and switch between isolated benches on one machine (`vybench bench switch <name>`). An existing install becomes the `default` bench.
 - 🎯 **More Than One Frappe Version**: A bench on the packaged Frappe release is ready in seconds. Frappe `15`, `develop`, or any tag or branch is built with `bench init` (network access and a few minutes).
-- 🗄️ **MariaDB or PostgreSQL**: Choose per bench and per site (`--db mariadb` or `--db postgres`). MariaDB 11.8 is bundled; PostgreSQL 16 comes from Homebrew's `postgresql@16` on macOS or the `vypgbench` snap on Linux.
+- 🗄️ **MariaDB or PostgreSQL**: Choose per bench and per site (`--db mariadb` or `--db postgres`). MariaDB 11.8 is bundled; PostgreSQL 16 runs separately on the host — Homebrew's `postgresql@16` on macOS, or your distro's `postgresql` package on Linux.
 - 📦 **FPM App Marketplace**: Browse the [fpm registry](https://fpm.vyogo.tech) and install prebuilt apps with no asset compilation. Today's packages are built for Linux x86_64; the TUI tells you when a package does not fit your machine.
 - 🛡️ **Isolated Redis Queues**: Each bench's `bench_id` namespaces its queues, so jobs never cross benches.
 

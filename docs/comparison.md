@@ -17,7 +17,7 @@ When setting up Frappe and ERPNext, developers and DevOps engineers often strugg
 | **Multi-Bench Orchestration** | 🔴 **Unsafe / Fragile** (Port collisions, manual directory juggling) | 🟡 **Resource-Heavy** (Multiple Docker Compose instances multiply container RAM) | 🟢 **Native Multi-Bench Engine** (`vybench bench switch`) with atomic switching, shared datastores, and `bench_id` Redis isolation |
 | **Frappe Version Support** | 🔴 **Hardcoded Single Version** | 🟡 **Image-bound** | 🟢 **Multiple benches, multiple versions** (the packaged release is linked instantly; v15, develop or any branch is built with `bench init`) |
 | **App Marketplace & Installation** | 🔴 **Slow Build** (`git clone` + `yarn` + `bench build`) | 🔴 **Slow Build** (`bench get-app` inside container) | 🟢 **FPM App Store** (1-click instant install; zero asset compilation) |
-| **Database Engines** | 🔴 **MariaDB Only** | 🟡 **Separate Container Swaps** | 🟢 **MariaDB or PostgreSQL per bench and site** (MariaDB 11.8 bundled; PostgreSQL 16 via the `vypgbench` snap or Homebrew's `postgresql@16`) |
+| **Database Engines** | 🔴 **MariaDB Only** | 🟡 **Separate Container Swaps** | 🟢 **MariaDB or PostgreSQL per bench and site** (MariaDB 11.8 bundled; PostgreSQL 16 runs separately on the host — a distro package on Linux, or Homebrew's `postgresql@16` on macOS) |
 | **Performance & I/O** | 🟢 **Native** | 🔴 **Degraded on macOS/Windows** (Bind-mount latency for `node_modules` & `apps/`) | 🟢 **Native Linux / macOS Speed** (Zero VM layer, direct kernel execution) |
 | **Resource Overhead** | 🟢 Low (Runs native processes) | 🔴 **Heavy** (Docker daemon + VM on Mac/Win + multi-container RAM overhead) | 🟢 **Minimal** (Single unprivileged daemon set; no container runtime overhead) |
 | **Uninstallation & Cleanup** | 🔴 **Messy / Manual** (Scatters files in `/var`, `/etc`, `/home`, lingering daemons) | 🟡 **Docker Prunes Required** (Leaves images, dangling volumes, network interfaces) | 🟢 **Atomic Single-Command Purge** (`sudo snap remove --purge vybench`) |
@@ -97,7 +97,7 @@ Unlike Docker setups where spinning up multiple benches multiplies container cou
 #### 8. Dynamic Frappe Versioning & Unified Dual Database
 Vybench does not force you into a single hardcoded version or database engine:
 * Run several Frappe versions side by side: the packaged release is linked into a new bench instantly, and `15`, `develop` or any branch is built with `bench init`. Each bench's version is detected from its tree.
-* Each bench and site selects **MariaDB 11.8** or **PostgreSQL 16**. MariaDB is bundled; PostgreSQL comes from the separate `vypgbench` snap on Linux or `postgresql@16` on macOS.
+* Each bench and site selects **MariaDB 11.8** or **PostgreSQL 16**. MariaDB is bundled; PostgreSQL runs separately on the host — a distro package on Linux, or Homebrew's `postgresql@16` on macOS.
 
 #### 9. Instant FPM Marketplace (Zero Asset Build Step)
 Through native Frappe Package Manager (FPM) integration, apps install in seconds with pre-compiled frontend bundles. No `yarn`, no `node_modules`, and no lengthy `bench build` compile times required.

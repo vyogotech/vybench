@@ -58,9 +58,9 @@ func DetectPlatform() Platform {
 	return PlatformUnknown
 }
 
-// InstanceName is the formula or snap instance name, e.g. "vybench",
-// "vybench-local" or "vypgbench". The wrappers export VYBENCH_NAME; when the
-// TUI is started directly on macOS it picks whichever formula is installed.
+// InstanceName is the formula or snap instance name, e.g. "vybench" or
+// "vybench-local". The wrappers export VYBENCH_NAME; when the TUI is started
+// directly on macOS it picks whichever formula is installed.
 func InstanceName() string {
 	if n := os.Getenv("VYBENCH_NAME"); n != "" {
 		return n

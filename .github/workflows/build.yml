@@ -307,7 +307,11 @@ jobs:
             | Snap | Database | Install |
             | :--- | :--- | :--- |
             | `vybench` | MariaDB (v16 stable) | `sudo snap install vybench` |
-            | `vypgbench` | PostgreSQL (develop) | `sudo snap install vypgbench` |
+
+            PostgreSQL benches run against a PostgreSQL 16 server installed separately on
+            the same host (reachable on 127.0.0.1:5432) -- the same model as Homebrew's
+            optional `postgresql@16` on macOS. There is no separate PostgreSQL-flavoured
+            snap.
 
             ### Native APT Repository (Ubuntu & Debian)
 
