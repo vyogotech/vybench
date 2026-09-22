@@ -19,8 +19,8 @@ BENCH_DIR="$LIVE_BENCH"
 if [ "$(get_mode)" = "developer" ]; then
   # Developer mode mirrors the Procfile's `web: bench serve`: werkzeug with the
   # auto-reloader, which also serves /assets and /files itself.
-  cd "$BENCH_DIR"
-  run_as_daemon "$BENCH_PY" \
+  # Enter the bench AFTER setpriv (see run_as_daemon_in).
+  run_as_daemon_in "$BENCH_DIR" "$BENCH_PY" \
     "$BENCH_CLI" serve --port "$PORT"
 fi
 

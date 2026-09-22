@@ -58,6 +58,11 @@ export BENCH_CLI="$BENCH_ROOT/env/bin/bench"
 
 export PATH="$SNAP/usr/sbin:$SNAP/usr/bin:$SNAP/sbin:$SNAP/bin:$SNAP/usr/lib/postgresql/16/bin:$SNAP/usr/lib/postgresql/15/bin:$BENCH_ROOT/env/bin:$PATH"
 export LD_LIBRARY_PATH="$SNAP/usr/lib/x86_64-linux-gnu:$SNAP/usr/lib/aarch64-linux-gnu:$SNAP/usr/lib:$SNAP/lib/x86_64-linux-gnu:$SNAP/lib/aarch64-linux-gnu:$SNAP/lib:$LD_LIBRARY_PATH"
+# libmagic's compiled-in database path is /usr/lib/file/magic.mgc, and inside the
+# snap /usr is the base's, which has no such file -- so the file(1) staged above
+# would fail with "cannot open magic file". `bench restore` calls file(1) on
+# every backup it restores. Guarded so a build without it is left alone.
+[ -f "$SNAP/usr/lib/file/magic.mgc" ] && export MAGIC="$SNAP/usr/lib/file/magic.mgc"
 export PYTHONPATH="$BENCH_ROOT/apps/frappe:$BENCH_ROOT/env/lib/python3.14/site-packages"
 # The socket lives OUTSIDE the data directory on purpose. The datadir holds the
 # actual database files and stays private to snap_daemon (0770); the socket
@@ -108,6 +113,29 @@ export GIT_CONFIG_NOSYSTEM=1
 # 002 keeps new files group-writable and world-unreadable.
 umask 002
 
+# Set a mode, and the setgid bit, as two calls.
+#
+# snapd's seccomp policy denies any chmod whose mode carries S_ISGID:
+#
+#   ~chmod - |S_ISGID
+#
+# The whole syscall is refused with EPERM, so `chmod u+rwx,g+rwxs,o-rwx DIR`
+# does not "apply what it can" -- it applies NOTHING, silently, because every
+# caller here ends in `|| true`. Asking for the permission bits and the setgid
+# bit separately means the part that can be set always is.
+#
+# The setgid call is expected to fail inside the snap and is kept only for an
+# unconfined build. Measured on the appliance: mkdir(2) cannot set the bit
+# either (the kernel masks a new directory's mode to S_IRWXUGO|S_ISVTX), so a
+# directory inside a strict snap gets setgid only by inheriting it. That costs
+# nothing here -- umask 002 above, plus a single service account, already keep
+# new files group-writable.
+share_mode() {
+  local mode="$1"; shift
+  chmod "$mode" "$@" 2>/dev/null || true
+  chmod g+s "$@" 2>/dev/null || true
+}
+
 # Datastore directories. These belong to snap_daemon in BOTH modes, because
 # mariadbd and redis always run as that account. The bench tree is deliberately
 # not touched here -- see bootstrap_bench.
@@ -120,7 +148,7 @@ bootstrap_datastores() {
   fi
 
   # Database files stay private...
-  chmod u+rwx,g+rwxs,o-rwx "$SNAP_COMMON/mariadb" "$SNAP_COMMON/postgres" "$SNAP_COMMON/redis" 2>/dev/null || true
+  share_mode u+rwx,g+rwx,o-rwx "$SNAP_COMMON/mariadb" "$SNAP_COMMON/postgres" "$SNAP_COMMON/redis"
   # ...but the socket directory is traversable, so `bench` works for any local
   # user with no group membership. Auth still gates actual database access.
   chmod 0755 "$SNAP_COMMON/run" 2>/dev/null || true
@@ -210,7 +238,7 @@ PYEOF
   # gets nothing. g+s on directories makes new files inherit the group, so files
   # created by the CLI user stay writable by the daemons and vice versa -- without
   # it the sharing silently decays as soon as either side writes something new.
-  chmod u+rwx,g+rwxs,o-rwx "$LIVE_BENCH" 2>/dev/null || true
+  share_mode u+rwx,g+rwx,o-rwx "$LIVE_BENCH"
   # shellcheck disable=SC2086
   chmod -R ug+rwX,o-rwx $shared 2>/dev/null || true
   # shellcheck disable=SC2086
@@ -282,7 +310,7 @@ PYEOF
     as_daemon ln -sfn "$SNAP_STABLE/usr/bin/python3.14" "$B/env/bin/python3.14"
     as_daemon ln -sfn python3.14 "$B/env/bin/python3"
     as_daemon ln -sfn python3.14 "$B/env/bin/python"
-    as_daemon find "$B/env/bin" -type f -exec sed -i '1s|^#!/.*/python.*|#!/usr/bin/env python3|' {} + 2>/dev/null || true
+    as_daemon find "$B/env/bin" -type f -exec sed -i "1s|^#!/.*/python.*|#!$B/env/bin/python3|" {} + 2>/dev/null || true
     [ -e "$B/env/bin/python3.14" ] || echo "WARNING: materialised venv python is dangling" >&2
   fi
 
@@ -400,6 +428,26 @@ run_as_daemon() {
     export_daemon_runtime_dirs
     exec setpriv --reuid="$DAEMON_USER" --regid="$DAEMON_USER" --clear-groups "$@"
   fi
+  exec "$@"
+}
+
+# Like run_as_daemon, but enters $1 as the working directory before exec'ing
+# the rest. The cd MUST happen after setpriv: bootstrap_common's share_mode
+# leaves the bench at 0770 owned by snap_daemon, and root inside a strict snap
+# has no CAP_DAC_OVERRIDE, so `cd "$LIVE_BENCH"` as root fails with
+# "Permission denied". Measured on the appliance: the first service to start
+# after a bench switch wins (cd while still 0775, then strips other bits);
+# worker / socketio / watch then die in a restart loop. web-wrapper already
+# avoided this by passing gunicorn --chdir after setpriv; this helper is the
+# same idea for every other service and for `sudo vybench.bench`.
+run_as_daemon_in() {
+  local dir="$1"; shift
+  if [ "$(id -u)" = "0" ]; then
+    export_daemon_runtime_dirs
+    exec setpriv --reuid="$DAEMON_USER" --regid="$DAEMON_USER" --clear-groups \
+      bash -c 'cd "$1" || exit 1; shift; exec "$@"' bash "$dir" "$@"
+  fi
+  cd "$dir" || exit 1
   exec "$@"
 }
 

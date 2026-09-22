@@ -6,11 +6,10 @@ set -e
 bootstrap_common
 # The active bench, resolved by snap-common.sh (current-bench, else the legacy one).
 BENCH_DIR="$LIVE_BENCH"
-cd "$BENCH_DIR"
 
 # `bench schedule` is the long-running scheduler process (the supervisor
 # frappe-schedule program). Note it is separate from per-site scheduler state:
 # a site still needs `bench --site <site> scheduler enable`, which the configure
-# hook does for production mode.
-run_as_daemon "$BENCH_PY" \
+# hook does for production mode. Enter the bench AFTER setpriv (see run_as_daemon_in).
+run_as_daemon_in "$BENCH_DIR" "$BENCH_PY" \
   "$BENCH_CLI" schedule

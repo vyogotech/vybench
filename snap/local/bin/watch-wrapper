@@ -6,10 +6,10 @@ set -e
 bootstrap_common
 # The active bench, resolved by snap-common.sh (current-bench, else the legacy one).
 BENCH_DIR="$LIVE_BENCH"
-cd "$BENCH_DIR"
 
 # Developer-mode asset rebuilder (`bench watch`). Needs node/yarn on PATH.
+# Enter the bench AFTER setpriv (see run_as_daemon_in).
 export PATH="$SNAP/bin:$PATH"
 
-run_as_daemon "$BENCH_PY" \
+run_as_daemon_in "$BENCH_DIR" "$BENCH_PY" \
   "$BENCH_CLI" watch

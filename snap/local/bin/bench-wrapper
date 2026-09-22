@@ -18,10 +18,11 @@ if [ -x "$TUI_BIN" ]; then
   # These names never reach frappe's bench: its own `bench drop` deletes a
   # bench directory.
   if [ "${1:-}" = "bench" ]; then
-    case "${2:-}" in list|current|switch|new|attach|drop) shift ;; esac
+    case "${2:-}" in list|current|switch|new|attach|drop|doctor) shift ;; esac
   fi
   case "${1:-}" in
     list|current|switch|new|attach|drop) exec "$TUI_BIN" bench "$@" ;;
+    doctor) exec "$TUI_BIN" "$@" ;;
   esac
 fi
 
@@ -36,14 +37,27 @@ require_bench_access "$@" || exit 1
 
 bootstrap_common
 
-# Outside a bench, run against the active one. `bench init` creates a new
-# bench at the path it is given, so it must not run from inside another.
-if [ "${1:-}" != "init" ] && [ ! -f "Procfile" ] && [ ! -d "sites" ]; then
-  cd "$LIVE_BENCH"
+# Run against LIVE_BENCH, always -- not only when the current directory does not
+# look like a bench. snap-common.sh already resolves LIVE_BENCH to the current
+# directory when that directory IS a bench, so this is a no-op in the ordinary
+# case; what it fixes is the case where it is not.
+#
+# Enter the bench AFTER dropping to snap_daemon (run_as_daemon_in). Two reasons:
+# 1. A command started somewhere snap_daemon cannot enter -- /root is mode 0700
+#    -- reaches bench with a cwd it cannot stat. is_bench_directory() fails and
+#    the user sees "No such command 'new-site'".
+# 2. Root inside a strict snap cannot itself cd into a snap_daemon-owned 0770
+#    bench (no DAC override). sudo vybench.bench would fail the same way the
+#    worker services did before run_as_daemon_in.
+#
+# `bench init` is the exception: it creates a bench at the path it is given and
+# must not run from inside another one.
+if [ "${1:-}" = "init" ]; then
+  run_as_daemon "$BENCH_PY" "$BENCH_CLI" "$@"
 fi
 
-# Normally this already runs as the invoking host user and run_as_daemon is a
-# plain exec. It only drops privileges when someone runs `sudo vybench.bench`,
+# Normally this already runs as the invoking host user and run_as_daemon_in is a
+# plain cd+exec. It only drops privileges when someone runs `sudo vybench.bench`,
 # which bench would otherwise refuse to do.
-run_as_daemon "$BENCH_PY" \
+run_as_daemon_in "$LIVE_BENCH" "$BENCH_PY" \
   "$BENCH_CLI" "$@"

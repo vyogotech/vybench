@@ -32,6 +32,12 @@ cat <<'EOF'
     sudo vybench.bench bench new <name>     # new bench on the packaged Frappe
     sudo vybench.bench bench switch <name>  # then: sudo snap restart vybench
 
+  DIAGNOSE & REPAIR
+
+    sudo vybench.bench doctor               # what is wrong with this bench
+    sudo vybench.bench doctor --fix         # repair what can be repaired
+    sudo vybench.bench doctor --all         # every registered bench
+
   SERVICES
 
     snap services vybench                   # list all services

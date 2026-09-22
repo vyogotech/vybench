@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // Platform identifies how vybench was installed.
@@ -110,6 +111,18 @@ func PackagedBenchPath() string {
 	return ""
 }
 
+// StableBenchPath is PackagedBenchPath through a path that survives a package
+// upgrade. $SNAP is revision-specific (/snap/vybench/34), so anything persisted
+// into a bench that points there dangles after the next `snap refresh`; the
+// `current` symlink follows the revision instead. This is the same rule
+// snap-common.sh follows with SNAP_STABLE.
+func StableBenchPath() string {
+	if DetectPlatform() == PlatformSnap {
+		return filepath.Join("/snap", InstanceName(), "current", "opt", "frappe-bench")
+	}
+	return PackagedBenchPath()
+}
+
 // vybenchCLI locates the Homebrew `vybench` wrapper script. The formula's own
 // copy comes first: a keg that is not linked has no `vybench` on PATH.
 func vybenchCLI() string {
@@ -125,16 +138,28 @@ func vybenchCLI() string {
 	return ""
 }
 
+// setEnv returns a copy of env with key=value set, removing any prior occurrences of key.
+func setEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	out := make([]string, 0, len(env)+1)
+	for _, e := range env {
+		if !strings.HasPrefix(e, prefix) {
+			out = append(out, e)
+		}
+	}
+	return append(out, prefix+value)
+}
+
 // benchEnv returns the environment for a child process that must operate on
 // benchPath. The TUI inherits BENCH_ROOT and FRAPPE_BENCH_ROOT from the wrapper
 // that launched it; after a bench switch those point at the old bench, and
 // frappe's get_bench_path() trusts FRAPPE_BENCH_ROOT, so all three are reset.
 func benchEnv(benchPath string) []string {
-	return append(os.Environ(),
-		"VYBENCH_BENCH="+benchPath,
-		"BENCH_ROOT="+benchPath,
-		"FRAPPE_BENCH_ROOT="+benchPath,
-	)
+	env := os.Environ()
+	env = setEnv(env, "VYBENCH_BENCH", benchPath)
+	env = setEnv(env, "BENCH_ROOT", benchPath)
+	env = setEnv(env, "FRAPPE_BENCH_ROOT", benchPath)
+	return env
 }
 
 // benchProgram returns the program, and the arguments that precede bench's

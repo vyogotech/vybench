@@ -52,17 +52,30 @@ func siteDBName(benchPath, site string) (string, error) {
 // is a folder in its data directory, so a site whose folder is missing never
 // got its database, even when the server is down.
 func QuickSiteCheck(benchPath, site string) (SiteCheck, bool) {
-	name, err := siteDBName(benchPath, site)
+	cfg, err := readConfig(filepath.Join(benchPath, "sites", site, "site_config.json"))
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		return SiteCheck{State: SiteIncomplete, Reason: "it has no site_config.json", DBMissing: true}, true
 	case err != nil:
 		return SiteCheck{State: SiteUnknown, Reason: err.Error()}, true
-	case name == "":
+	}
+	name, _ := cfg["db_name"].(string)
+	if name == "" {
 		return SiteCheck{State: SiteIncomplete, Reason: "its database was never set up", DBMissing: true}, true
 	}
 	if dir, ok := siteDatabaseDir(benchPath, site, name); ok && !isDir(dir) {
 		return SiteCheck{State: SiteIncomplete, Reason: "its database was never created", DBMissing: true}, true
+	}
+	if rawApps, ok := cfg["installed_apps"].([]any); ok {
+		var apps []string
+		for _, a := range rawApps {
+			if s, ok := a.(string); ok {
+				apps = append(apps, s)
+			}
+		}
+		if len(apps) > 0 {
+			return SiteCheck{State: SiteHealthy, Reason: "frappe is installed", Apps: apps}, true
+		}
 	}
 	return SiteCheck{}, false
 }

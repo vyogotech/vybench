@@ -137,7 +137,18 @@ func TestNewSiteKeepsAWorkingSite(t *testing.T) {
 	if m.form.focus != fieldForce {
 		t.Error("focus did not move to Force")
 	}
+	view := ansi.Strip(m.renderForm())
+	if strings.Contains(view, "[Enter] Replace site") {
+		t.Fatalf("footer promised Replace while Force was off:\n%s", view)
+	}
+	if !strings.Contains(view, "Force, then Enter to replace") {
+		t.Fatalf("footer should say to turn on Force first:\n%s", view)
+	}
 	m, _ = m.Update(press(" "))
+	view = ansi.Strip(m.renderForm())
+	if !strings.Contains(view, "[Enter] Replace site") {
+		t.Fatalf("footer should say Replace once Force is on:\n%s", view)
+	}
 	m, msgs = submit(t, m)
 	job, ok := find[RunJobMsg](msgs)
 	if !ok || len(job.Spec.Steps) != 2 {
@@ -383,11 +394,25 @@ func TestNewSiteInstallsBenchApps(t *testing.T) {
 	}
 }
 
+func TestSitesPressASwitchesToMarketplace(t *testing.T) {
+	m, _ := sitesFixture(t)
+	m.nav.cursor = slices.Index(m.sites, "good.localhost")
+	m, cmd := m.Update(press("a"))
+	if cmd == nil {
+		t.Fatal("expected command from pressing 'a'")
+	}
+	msg := cmd()
+	sw, ok := msg.(SwitchToMarketplaceMsg)
+	if !ok || sw.TargetSite != "good.localhost" {
+		t.Fatalf("expected SwitchToMarketplaceMsg with target 'good.localhost', got %+v", msg)
+	}
+}
+
 func TestInstallAppOnASite(t *testing.T) {
 	m, bench := sitesFixture(t)
 	write(t, filepath.Join(bench, "sites", "apps.txt"), "frappe\nerpnext\nhrms\n")
 	m.nav.cursor = slices.Index(m.sites, "good.localhost")
-	m, cmd := m.Update(press("a"))
+	cmd := m.openInstall("good.localhost")
 	if m.install == nil || cmd == nil {
 		t.Fatal("no install dialog")
 	}
@@ -408,5 +433,212 @@ func TestInstallAppOnASite(t *testing.T) {
 	i := slices.Index(job.Spec.Steps[0].Cmd.Args, "--site")
 	if !ok || i < 0 || !slices.Equal(job.Spec.Steps[0].Cmd.Args[i:], []string{"--site", "good.localhost", "install-app", "hrms"}) {
 		t.Errorf("job %+v", job)
+	}
+}
+
+func TestInstallAppAllInstalledSwitchesToMarketplace(t *testing.T) {
+	m, bench := sitesFixture(t)
+	write(t, filepath.Join(bench, "sites", "apps.txt"), "frappe\nerpnext\n")
+	write(t, filepath.Join(bench, "sites", "good.localhost", "site_config.json"), `{"db_name": "_good", "installed_apps": ["frappe", "erpnext"]}`)
+	_ = m.openInstall("good.localhost")
+	if m.install == nil {
+		t.Fatal("expected install dialog")
+	}
+	if !slices.Equal(m.install.installed, []string{"frappe", "erpnext"}) {
+		t.Fatalf("expected installed apps populated, got %v", m.install.installed)
+	}
+	view := ansi.Strip(m.View(100, 30))
+	if !strings.Contains(view, "All local bench apps are installed on good.localhost.") {
+		t.Errorf("view missing all installed prompt:\n%s", view)
+	}
+	m, enterCmd := m.Update(press("enter"))
+	if m.install != nil {
+		t.Error("dialog should close on enter")
+	}
+	if enterCmd == nil {
+		t.Fatal("expected command on enter")
+	}
+	msg := enterCmd()
+	sw, ok := msg.(SwitchToMarketplaceMsg)
+	if !ok || sw.TargetSite != "good.localhost" {
+		t.Fatalf("expected SwitchToMarketplaceMsg on enter, got %+v", msg)
+	}
+}
+
+func TestInstallAppEdgeCases(t *testing.T) {
+	m, bench := sitesFixture(t)
+	// 1. openInstall on an incomplete site
+	_ = m.openInstall("half.localhost")
+	if m.install == nil {
+		t.Fatal("expected install dialog on half.localhost")
+	}
+	m.install.unfinished = "db missing"
+	viewUnfinished := ansi.Strip(m.View(100, 30))
+	if !strings.Contains(viewUnfinished, "This site did not finish installing") {
+		t.Errorf("expected unfinished warning in view: %s", viewUnfinished)
+	}
+
+	// 2. allInstalled with an error message
+	m.install.apps = []string{"erpnext"}
+	m.install.installed = []string{"erpnext"}
+	m.install.err = "marketplace connection error"
+	viewErr := ansi.Strip(m.View(100, 30))
+	if !strings.Contains(viewErr, "marketplace connection error") {
+		t.Errorf("expected error in view: %s", viewErr)
+	}
+
+	// 3. renderInstall when d.installed == nil falls back to QuickSiteCheck
+	write(t, filepath.Join(bench, "sites", "quick.localhost", "site_config.json"), `{"db_name": "_quick", "installed_apps": ["frappe", "erpnext"]}`)
+	_ = m.openInstall("quick.localhost")
+	m.install.installed = nil // force nil to test renderInstall fallback
+	viewFallback := ansi.Strip(m.View(100, 30))
+	if !strings.Contains(viewFallback, "All local bench apps are installed") {
+		t.Errorf("renderInstall failed fallback: %s", viewFallback)
+	}
+
+	// 4. openInstall when incomplete state detected directly by QuickSiteCheck
+	// A site without db_name is incomplete:
+	write(t, filepath.Join(bench, "sites", "incomplete.localhost", "site_config.json"), `{}`)
+	_ = m.openInstall("incomplete.localhost")
+	if m.install == nil || m.install.unfinished == "" {
+		t.Errorf("expected unfinished reason set in openInstall: %+v", m.install)
+	}
+}
+
+func TestAddCustomDomain(t *testing.T) {
+	m, bench := sitesFixture(t)
+	m.nav.cursor = slices.Index(m.sites, "good.localhost")
+
+	// Pressing D opens the dialog
+	m, cmd := m.Update(press("D"))
+	if m.domain == nil || cmd != nil {
+		t.Fatal("no domain dialog on D")
+	}
+
+	if view := ansi.Strip(m.View(100, 30)); !strings.Contains(view, "Add Custom Domain to good.localhost") {
+		t.Errorf("dialog title missing: \n%s", view)
+	}
+
+	// Pressing Esc closes the dialog
+	m, _ = m.Update(press("esc"))
+	if m.domain != nil {
+		t.Fatal("domain dialog didn't close on esc")
+	}
+
+	// Reopen with 'c'
+	m, _ = m.Update(press("c"))
+	if m.domain == nil {
+		t.Fatal("no domain dialog on c")
+	}
+
+	// Submit empty
+	m.domain.setFocus(2)
+	m, _ = m.Update(press("enter"))
+	if m.domain == nil || m.domain.err == "" {
+		t.Fatal("expected error on empty submit")
+	}
+
+	// Field navigation
+	m.domain.setFocus(0)
+	m, _ = m.Update(press("tab"))
+	if m.domain.focus != 1 {
+		t.Errorf("expected focus 1, got %d", m.domain.focus)
+	}
+	m, _ = m.Update(press("up"))
+	if m.domain.focus != 0 {
+		t.Errorf("expected focus 0, got %d", m.domain.focus)
+	}
+
+	// Fill and submit
+	m.domain.domain.SetValue("custom.example.com")
+	m.domain.cert.SetValue("/cert.pem")
+	m.domain.key.SetValue("/key.pem")
+	m.domain.setFocus(2) // move to last field
+	m, cmd = m.Update(press("enter"))
+
+	job, ok := find[RunJobMsg](run(cmd))
+	if !ok {
+		t.Fatal("no job returned on valid submit")
+	}
+	if !strings.Contains(job.Title, "custom.example.com to good.localhost") {
+		t.Errorf("job title: %s", job.Title)
+	}
+	args := job.Spec.Steps[0].Cmd.Args
+	if !slices.Contains(args, "add-domain") || !slices.Contains(args, "custom.example.com") ||
+		!slices.Contains(args, "--ssl-certificate") || !slices.Contains(args, "/cert.pem") {
+		t.Errorf("job args: %v", args)
+	}
+	
+	// test sites refresh info bar
+	write(t, filepath.Join(bench, "sites", "good.localhost", "site_config.json"), `{"db_name": "_good", "domains": ["custom.example.com"]}`)
+	m.reload()
+	if view := ansi.Strip(m.View(100, 30)); !strings.Contains(view, "domains: custom.example.com") {
+		t.Errorf("info bar didn't show domain: \n%s", view)
+	}
+
+	// test already registered
+	m, _ = m.Update(press("D"))
+	m.domain.domain.SetValue("custom.example.com")
+	m.domain.setFocus(2)
+	m, _ = m.Update(press("enter"))
+	if m.domain == nil || !strings.Contains(m.domain.err, "already registered") {
+		t.Fatal("expected already registered error")
+	}
+
+	// test key update
+	m = typeText(m, "x")
+	if m.domain.err != "" {
+		t.Error("expected error to be cleared on keypress")
+	}
+
+	// test shift+tab navigation
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.domain.focus != 1 {
+		t.Errorf("expected focus 1, got %d", m.domain.focus)
+	}
+
+	// test invalid domain
+	m.domain.domain.SetValue("invalid domain!")
+	m.domain.setFocus(2)
+	m, _ = m.Update(press("enter"))
+	if m.domain == nil || !strings.Contains(m.domain.err, "spaces") {
+		t.Fatal("expected invalid domain error")
+	}
+
+	// test render with error
+	if view := ansi.Strip(m.View(100, 30)); !strings.Contains(view, "spaces") {
+		t.Errorf("expected error in view, got \n%s", view)
+	}
+}
+
+// A site whose creation failed is marked, and the mark must go once the same
+// site is created successfully -- otherwise a healthy, working site keeps
+// telling the user to drop it.
+func TestFailedMarkClearsWhenTheSiteIsRecreated(t *testing.T) {
+	m, bench := sitesFixture(t) // the fixture already has half.localhost
+
+	m, _ = m.Update(siteFailedMsg{bench: bench, site: "half.localhost"})
+	if m.health["half.localhost"] != "last install failed" {
+		t.Fatalf("a failed creation was not marked: %v", m.health)
+	}
+	m, _ = m.Update(siteCreatedMsg{bench: bench, site: "half.localhost"})
+	if got, marked := m.health["half.localhost"]; marked && got == "last install failed" {
+		t.Fatalf("the failure mark survived a successful recreate: %v", m.health)
+	}
+	if m.failed["half.localhost"] {
+		t.Fatal("the failed flag is still set")
+	}
+}
+
+func TestSuccessfulCreateAnnouncesTheSite(t *testing.T) {
+	m, _ := sitesFixture(t)
+	m = openForm(t, m, "ok.localhost")
+	_, msgs := submit(t, m)
+	job, ok := find[RunJobMsg](msgs)
+	if !ok {
+		t.Fatal("no job")
+	}
+	if _, ok := find[siteCreatedMsg](job.After); !ok {
+		t.Error("a successful creation does not clear an earlier failure mark")
 	}
 }

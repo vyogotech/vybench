@@ -18,6 +18,11 @@ type BenchesChangedMsg struct{}
 // SitesChangedMsg is broadcast after a site is created or dropped.
 type SitesChangedMsg struct{}
 
+// SwitchToMarketplaceMsg requests switching to the Marketplace tab with a target site preselected.
+type SwitchToMarketplaceMsg struct {
+	TargetSite string
+}
+
 // AppsChangedMsg is broadcast after an app is installed into the bench.
 type AppsChangedMsg struct{}
 

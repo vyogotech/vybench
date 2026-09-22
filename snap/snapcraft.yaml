@@ -184,6 +184,16 @@ parts:
     override-build: |
       craftctl default
       chmod 755 $SNAPCRAFT_PART_INSTALL/bin/*
+      # `tar` for everything that runs inside the snap. The base's GNU tar 1.35
+      # probes openat2(2), which snapd's seccomp policy denies with EPERM rather
+      # than ENOSYS -- and tar only falls back on ENOSYS, so every archive it
+      # writes or reads dies with "Cannot stat: Operation not permitted". Frappe
+      # shells out to tar for `bench backup --with-files` and for restoring the
+      # files half of a backup, so without this neither works. busybox's tar
+      # never touches openat2, is a static binary, and accepts the exact command
+      # lines frappe uses (`tar cf - X | gzip`, `tar xvf F --strip 2`). It sits in
+      # $SNAP/bin, which precedes the base's /usr/bin on PATH.
+      ln -sf ../usr/bin/busybox $SNAPCRAFT_PART_INSTALL/bin/tar
 
   # ── Interactive TUI and multi-bench CLI ────────────────────────────────────
   # bench-wrapper hands a bare `bench`, `bench tui`, and the multi-bench
@@ -221,6 +231,14 @@ parts:
       - mariadb-client
       - libmariadb-dev
       - util-linux          # provides setpriv, used to drop to snap_daemon
+      - busybox-static      # its tar stands in for GNU tar, which snapd's seccomp breaks (see wrappers)
+      # frappe's `bench restore` shells out to file(1) to detect encrypted backups
+      # and dies with "file: command not found" without it -- so restore never
+      # worked in the snap. libmagic1t64 + libmagic-mgc are its library and
+      # compiled magic database; snap-common.sh points MAGIC at the latter.
+      - file
+      - libmagic1t64
+      - libmagic-mgc
       - gettext-base        # provides envsubst, used to render the nginx template
       - libcrypt1
       - libedit2

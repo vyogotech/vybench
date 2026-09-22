@@ -9,10 +9,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -84,28 +86,232 @@ type Catalog struct {
 
 // FPMClient reads the fpm registry.
 type FPMClient struct {
-	RegistryURL string
+	RegistryURL string   // the primary; what `fpm repo add` is pointed at
+	Mirrors     []string // alternates, tried when the primary does not answer
 	httpClient  *http.Client
 }
 
-// NewFPMClient creates a client for VYBENCH_FPM_REGISTRY or the default registry.
+// NewFPMClient creates a client for VYBENCH_FPM_REGISTRY or the default
+// registry. VYBENCH_FPM_REGISTRY may name several, separated by commas: the
+// first is the one repositories are configured against, and the rest are
+// mirrors, tried in turn whenever the first does not answer.
+//
+// Mirrors exist because reaching the registry is not uniformly reliable. It is
+// behind Cloudflare, and from a DigitalOcean droplet in sgp1 Cloudflare answers
+// from Sao Paulo -- a path that, measured, dropped every request for minutes at
+// a time. No retry policy rescues a route that is down; a second origin does.
 func NewFPMClient() *FPMClient {
-	u := os.Getenv("VYBENCH_FPM_REGISTRY")
-	if u == "" {
-		u = DefaultRegistryURL
+	var urls []string
+	for _, u := range strings.Split(os.Getenv("VYBENCH_FPM_REGISTRY"), ",") {
+		if u = strings.TrimRight(strings.TrimSpace(u), "/"); u != "" {
+			urls = append(urls, u)
+		}
+	}
+	if len(urls) == 0 {
+		urls = []string{DefaultRegistryURL}
 	}
 	return &FPMClient{
-		RegistryURL: strings.TrimRight(u, "/"),
-		httpClient:  &http.Client{Timeout: 15 * time.Second},
+		RegistryURL: urls[0],
+		Mirrors:     urls[1:],
+		httpClient:  newRegistryHTTPClient(),
 	}
 }
 
-func (c *FPMClient) getJSON(ctx context.Context, path string, v any) error {
-	u, err := url.JoinPath(c.RegistryURL, path)
-	if err != nil {
-		return err
+// registries is the primary followed by its mirrors.
+func (c *FPMClient) registries() []string {
+	return append([]string{c.RegistryURL}, c.Mirrors...)
+}
+
+// Reaching the registry is not the uniform problem it looks like. It is behind
+// Cloudflare's anycast, and from some networks -- a DigitalOcean droplet in
+// sgp1 is the case this was written for -- one advertised address completes the
+// TCP handshake and then never answers, so the TLS handshake hangs until the
+// client gives up. Go's transport treats a successful dial as the end of
+// address selection, so it never tries the other address: the whole 15 seconds
+// are spent on the dead one, the marketplace drops to its versionless built-in
+// catalog, and every app shows as "latest".
+//
+// So the handshake happens here, per address, each with its own short deadline,
+// which turns the remaining addresses into a real fallback.
+// The budgets come from measuring the bad path: a request that is going to
+// succeed answers in under two seconds, and one that is going to fail hangs
+// until something cuts it off. So the win is in cutting it off early and
+// trying again, not in waiting longer -- eight short attempts beat one long
+// one by a wide margin, and cost nothing when the first succeeds.
+const (
+	perAddressBudget  = 3 * time.Second // one address's connect and handshake
+	registryTimeout   = 6 * time.Second // one request, across every address
+	registryAttempts  = 5               // rounds over the registry list
+	registryRetryWait = 250 * time.Millisecond
+)
+
+func newRegistryHTTPClient() *http.Client {
+	d := &net.Dialer{Timeout: perAddressBudget, KeepAlive: 30 * time.Second}
+	tr := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		MaxIdleConns:          8,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   perAddressBudget,
+		ExpectContinueTimeout: time.Second,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialEachAddress(ctx, addr, func(ctx context.Context, a string) (net.Conn, error) {
+				return d.DialContext(ctx, network, a)
+			})
+		},
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	// A proxy speaks for every host, so address selection is its problem, not
+	// ours: only take the TLS handshake over on a direct connection.
+	tr.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			host = addr
+		}
+		return dialEachAddress(ctx, addr, func(ctx context.Context, a string) (net.Conn, error) {
+			raw, err := d.DialContext(ctx, network, a)
+			if err != nil {
+				return nil, err
+			}
+			conn := tls.Client(raw, &tls.Config{ServerName: host, NextProtos: []string{"http/1.1"}})
+			if err := conn.HandshakeContext(ctx); err != nil {
+				_ = raw.Close()
+				return nil, err
+			}
+			return conn, nil
+		})
+	}
+	// No client-level timeout: getJSON gives each attempt its own deadline, so
+	// a slow first attempt must not eat the retries' budget.
+	return &http.Client{Transport: tr}
+}
+
+// dialEachAddress runs attempt against every address the host in addr resolves
+// to, giving each its own budget, and returns the first connection that comes
+// up. Families are interleaved, so a host with no route to IPv6 costs one
+// attempt rather than all of them.
+func dialEachAddress(ctx context.Context, addr string, attempt func(context.Context, string) (net.Conn, error)) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return attempt(ctx, addr)
+	}
+	if net.ParseIP(host) != nil {
+		return attempt(ctx, addr)
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil || len(ips) == 0 {
+		return attempt(ctx, addr) // let the dialer report the resolution failure
+	}
+	var firstErr error
+	for _, ip := range interleaveFamilies(ips) {
+		if ctx.Err() != nil {
+			break
+		}
+		actx, cancel := context.WithTimeout(ctx, perAddressBudget)
+		conn, err := attempt(actx, net.JoinHostPort(ip.IP.String(), port))
+		cancel()
+		if err == nil {
+			return conn, nil
+		}
+		if firstErr == nil {
+			firstErr = fmt.Errorf("%s: %w", ip.IP, err)
+		}
+	}
+	if firstErr == nil {
+		firstErr = fmt.Errorf("no address for %s could be reached", host)
+	}
+	return nil, firstErr
+}
+
+// interleaveFamilies alternates IPv6 and IPv4 addresses, IPv6 first, the order
+// Happy Eyeballs prescribes.
+func interleaveFamilies(ips []net.IPAddr) []net.IPAddr {
+	var v6, v4 []net.IPAddr
+	for _, ip := range ips {
+		if ip.IP.To4() == nil {
+			v6 = append(v6, ip)
+		} else {
+			v4 = append(v4, ip)
+		}
+	}
+	out := make([]net.IPAddr, 0, len(ips))
+	for i := 0; i < len(v6) || i < len(v4); i++ {
+		if i < len(v6) {
+			out = append(out, v6[i])
+		}
+		if i < len(v4) {
+			out = append(out, v4[i])
+		}
+	}
+	return out
+}
+
+// getJSON fetches and decodes one registry document, retrying a request that
+// never got an answer. A refusal is not retried: a 404 says the same thing
+// however often it is asked.
+// getJSON fetches and decodes one registry document. Each round tries every
+// configured registry in turn, so a working mirror is reached in seconds rather
+// than after the primary has exhausted its retries. A refusal ends it: a 404
+// says the same thing however often it is asked.
+func (c *FPMClient) getJSON(ctx context.Context, path string, v any) error {
+	var urls []string
+	for _, base := range c.registries() {
+		u, err := url.JoinPath(base, path)
+		if err != nil {
+			return err
+		}
+		urls = append(urls, u)
+	}
+	var lastErr error
+	rounds := 0
+	for attempt := 0; attempt < registryAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return giveUp(urls[0], lastErr, rounds, ctx.Err())
+			case <-time.After(registryRetryWait):
+			}
+		}
+		for _, u := range urls {
+			if ctx.Err() != nil {
+				return giveUp(urls[0], lastErr, rounds, ctx.Err())
+			}
+			rounds++
+			err := c.getOnce(ctx, u, v)
+			if err == nil {
+				return nil
+			}
+			var refused httpStatusError
+			if errors.As(err, &refused) && len(urls) == 1 {
+				return err
+			}
+			lastErr = err
+		}
+	}
+	return giveUp(urls[0], lastErr, rounds, nil)
+}
+
+func giveUp(u string, lastErr error, attempts int, ctxErr error) error {
+	if lastErr == nil {
+		lastErr = ctxErr
+	}
+	if lastErr == nil {
+		lastErr = errors.New("no attempt was made")
+	}
+	return fmt.Errorf("%s: %w (gave up after %d attempts)", u, lastErr, attempts)
+}
+
+// httpStatusError is an answer from the registry that is not 200 -- as opposed
+// to no answer at all, which is what the retry loop is for.
+type httpStatusError struct {
+	URL    string
+	Status string
+}
+
+func (e httpStatusError) Error() string { return e.URL + " returned " + e.Status }
+
+func (c *FPMClient) getOnce(ctx context.Context, u string, v any) error {
+	rctx, cancel := context.WithTimeout(ctx, registryTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(rctx, http.MethodGet, u, nil)
 	if err != nil {
 		return err
 	}
@@ -117,7 +323,7 @@ func (c *FPMClient) getJSON(ctx context.Context, path string, v any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s returned %s", u, resp.Status)
+		return httpStatusError{URL: u, Status: resp.Status}
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(v); err != nil {
 		return fmt.Errorf("%s did not return a package index: %w", u, err)
@@ -429,12 +635,26 @@ func FindFPM() (string, error) {
 	if p := os.Getenv("VYBENCH_FPM"); p != "" {
 		candidates = append(candidates, p)
 	}
+
 	switch DetectPlatform() {
 	case PlatformSnap:
-		candidates = append(candidates, filepath.Join(os.Getenv("SNAP"), "bin", "fpm-wrapper"))
+		candidates = append(candidates,
+			filepath.Join(os.Getenv("SNAP"), "bin", "fpm-wrapper"),
+			filepath.Join(os.Getenv("SNAP_COMMON"), "bin", "fpm"),
+			filepath.Join(os.Getenv("SNAP"), "usr", "bin", "fpm"),
+		)
 	case PlatformBrew:
-		candidates = append(candidates, filepath.Join(brewLibexec(), "bin", "fpm"))
+		candidates = append(candidates,
+			DynamicFPMPath(),
+			filepath.Join(brewLibexec(), "bin", "fpm"),
+		)
+	default:
+		candidates = append(candidates,
+			DynamicFPMPath(),
+			"/usr/local/bin/fpm",
+		)
 	}
+
 	for _, c := range candidates {
 		if isExecutable(c) {
 			return c, nil
@@ -453,20 +673,42 @@ func isVyogoFPM(path string) bool {
 	return bytes.Contains(out, []byte("Frappe Package Manager"))
 }
 
-// fpmConfigPath is where fpm keeps its repositories. The snap's fpm-wrapper
-// points HOME at $SNAP_USER_COMMON, so the TUI must look there too.
-func fpmConfigPath() string {
-	home := os.Getenv("HOME")
+// fpmConfigHome returns the directory where fpm configuration and repositories reside.
+func fpmConfigHome() string {
 	if DetectPlatform() == PlatformSnap {
-		home = os.Getenv("SNAP_USER_COMMON")
-		if home == "" {
-			home = os.Getenv("SNAP_COMMON")
+		if common := os.Getenv("SNAP_COMMON"); common != "" {
+			return common
+		}
+		if userCommon := os.Getenv("SNAP_USER_COMMON"); userCommon != "" {
+			return userCommon
 		}
 	}
+	home := os.Getenv("HOME")
 	if home == "" {
 		home, _ = os.UserHomeDir()
 	}
-	return filepath.Join(home, ".fpm", "config.json")
+	return home
+}
+
+// fpmConfigPath is where fpm keeps its repositories. Under strict snap confinement
+// $SNAP_COMMON is accessible to all bench processes and daemons.
+func fpmConfigPath() string {
+	return filepath.Join(fpmConfigHome(), ".fpm", "config.json")
+}
+
+func fpmEnv(benchPath string) []string {
+	var env []string
+	if benchPath != "" {
+		env = benchEnv(benchPath)
+	} else {
+		env = os.Environ()
+	}
+	if DetectPlatform() == PlatformSnap {
+		if home := fpmConfigHome(); home != "" {
+			env = setEnv(env, "HOME", home)
+		}
+	}
+	return env
 }
 
 // repositoryStep returns the `fpm repo add` step, or ok=false when a
@@ -493,9 +735,12 @@ func repositoryStep(fpmBin, registryURL string) (Step, bool) {
 		}
 		name = fmt.Sprintf("vybench-%d", i)
 	}
+	cmd := exec.Command(fpmBin, "repo", "add", name, registryURL)
+	cmd.Dir = fpmConfigHome()
+	cmd.Env = fpmEnv("")
 	return Step{
 		Label: "Adding fpm repository " + registryURL,
-		Cmd:   exec.Command(fpmBin, "repo", "add", name, registryURL),
+		Cmd:   cmd,
 	}, true
 }
 
@@ -507,6 +752,13 @@ func sameURL(a, b string) bool {
 // InstallSpec returns the job that installs pkg into the bench and, when site
 // is not empty, onto that site (`fpm install --site` runs install-app).
 func (c *FPMClient) InstallSpec(pkg FPMPackage, benchPath, site string) (JobSpec, error) {
+	// Checked before anything is started: an install into a bench whose apps/
+	// and env/ are links into the package gets most of the way through and then
+	// dies on "read-only file system" and rolls back, which says nothing about
+	// what is actually wrong or what to do about it.
+	if err := BenchAcceptsApps(benchPath); err != nil {
+		return JobSpec{}, err
+	}
 	fpmBin, err := FindFPM()
 	if err != nil {
 		return JobSpec{}, err
@@ -523,6 +775,34 @@ func (c *FPMClient) InstallSpec(pkg FPMPackage, benchPath, site string) (JobSpec
 	}
 	cmd := exec.Command(fpmBin, args...)
 	cmd.Dir = benchPath
-	cmd.Env = benchEnv(benchPath)
+	cmd.Env = fpmEnv(benchPath)
 	return JobSpec{Steps: append(steps, Step{Label: label, Cmd: cmd})}, nil
+}
+
+// BenchAcceptsApps reports whether an app can be installed into benchPath, and
+// explains what to do when it cannot.
+func BenchAcceptsApps(benchPath string) error {
+	var readonly []string
+	for _, t := range []string{"apps", "env"} {
+		p := filepath.Join(benchPath, t)
+		if !isDir(p) {
+			continue
+		}
+		probe := filepath.Join(p, ".vybench-write-probe")
+		f, err := os.OpenFile(probe, os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			readonly = append(readonly, t+"/")
+			continue
+		}
+		_ = f.Close()
+		_ = os.Remove(probe)
+	}
+	if len(readonly) == 0 {
+		return nil
+	}
+	return fmt.Errorf("this bench cannot have apps installed into it: %s are read-only, because they are symlinks "+
+		"into the bench shipped with %s. Installing an app writes to both. To make this bench writable (about 1.5 GB, once), "+
+		"make it the active bench and run 'sudo snap set %s mode=developer', then 'sudo snap set %s mode=production' to bring "+
+		"the services back",
+		strings.Join(readonly, " and "), InstanceName(), InstanceName(), InstanceName())
 }
