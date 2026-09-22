@@ -322,10 +322,10 @@ func TestRestoreFromAFileWithoutBackups(t *testing.T) {
 	m.restore.setFocus(m.restore.fields()[len(m.restore.fields())-1])
 	_, cmd := m.Update(press("enter"))
 	job, ok := find[RunJobMsg](run(cmd))
-	if !ok || len(job.Spec.Steps) != 2 {
-		t.Fatalf("expected a safety backup then the restore: %+v", job)
+	if !ok || len(job.Spec.Steps) != 3 || job.Spec.Steps[1].Fn == nil {
+		t.Fatalf("expected a safety backup, a mark step, then the restore: %+v", job)
 	}
-	if args := job.Spec.Steps[1].Cmd.Args; !slices.Contains(args, sql) || slices.Contains(args, "--with-public-files") {
+	if args := job.Spec.Steps[2].Cmd.Args; !slices.Contains(args, sql) || slices.Contains(args, "--with-public-files") {
 		t.Errorf("args = %v", args)
 	}
 }
@@ -568,7 +568,7 @@ func TestAddCustomDomain(t *testing.T) {
 		!slices.Contains(args, "--ssl-certificate") || !slices.Contains(args, "/cert.pem") {
 		t.Errorf("job args: %v", args)
 	}
-	
+
 	// test sites refresh info bar
 	write(t, filepath.Join(bench, "sites", "good.localhost", "site_config.json"), `{"db_name": "_good", "domains": ["custom.example.com"]}`)
 	m.reload()

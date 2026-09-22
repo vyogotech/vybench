@@ -9,6 +9,34 @@ import (
 	"time"
 )
 
+func TestCollapseProgress(t *testing.T) {
+	got := CollapseProgress(nil, []string{
+		"Updating DocTypes  1%",
+		"Updating DocTypes  2%",
+		"Updating DocTypes  100%",
+		"Syncing users",
+		"Building assets  10%",
+		"Building assets  20%",
+	})
+	want := []string{
+		"Updating DocTypes  100%",
+		"Syncing users",
+		"Building assets  20%",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %q", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("line %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+	plain := CollapseProgress([]string{"hello"}, []string{"world"})
+	if len(plain) != 2 || plain[1] != "world" {
+		t.Fatalf("non-progress lines were collapsed: %q", plain)
+	}
+}
+
 func collect(t *testing.T, j *Job, timeout time.Duration) []string {
 	t.Helper()
 	var lines []string

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -124,6 +125,30 @@ func (j *Job) run(spec JobSpec) {
 	j.mu.Lock()
 	j.err = err
 	j.mu.Unlock()
+}
+
+// progressTail matches a bench progress bar ("Updating DocTypes … 3%"). Those
+// arrive as a new line per percent because the child uses carriage returns,
+// and showing each one floods the job pane.
+var progressTail = regexp.MustCompile(`\s+\d{1,3}%$`)
+
+// CollapseProgress keeps a single line for a progress bar. A new line that
+// is the same text with a different percentage replaces the previous one.
+func CollapseProgress(lines []string, incoming []string) []string {
+	for _, line := range incoming {
+		if n := len(lines); n > 0 && sameProgress(lines[n-1], line) {
+			lines[n-1] = line
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+func sameProgress(a, b string) bool {
+	aa := progressTail.ReplaceAllString(a, "")
+	bb := progressTail.ReplaceAllString(b, "")
+	return aa != a && aa == bb && aa != ""
 }
 
 // emit sends a line to the reader, dropping it once the job is cancelled so a

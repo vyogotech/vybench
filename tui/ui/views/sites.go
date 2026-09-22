@@ -1044,6 +1044,7 @@ func (m *SitesModel) openRestore(site string) tea.Cmd {
 	if site != "" {
 		r.backups = core.ListBackups(m.bench.Path, site)
 		r.engine = engineOr(m.dbTypes[site])
+		r.pick = core.PreferredBackupIndex(r.backups)
 	}
 	r.refresh()
 	if len(r.backups) > 0 {
@@ -1570,4 +1571,3 @@ func (m SitesModel) renderDomain() string {
 	return dialog("Add Custom Domain to "+d.site, rows,
 		theme.StylePrimary.Render("[Enter] Submit")+theme.StyleMuted.Render("  [Tab] Fields  [Esc] Cancel"))
 }
-

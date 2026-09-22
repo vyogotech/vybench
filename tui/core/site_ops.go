@@ -217,6 +217,7 @@ type Backup struct {
 	PublicFiles  string // …-files.tar or .tgz
 	PrivateFiles string // …-private-files.tar or .tgz
 	Encrypted    bool
+	Safety       bool  // automatic copy taken just before a restore
 	Size         int64 // database dump size
 }
 
@@ -232,7 +233,82 @@ func (b Backup) Label() string {
 	if b.Encrypted {
 		s += " · encrypted"
 	}
+	if b.Safety {
+		s += " · safety copy"
+	}
 	return s
+}
+
+// PreferredBackupIndex is the backup a restore should start on. ListBackups
+// is newest-first, and the newest file is often the safety copy "Back up
+// first" just wrote, which is the site as it is now rather than the copy the
+// user meant to restore. Prefer the newest backup that has files and is not
+// a safety copy.
+func PreferredBackupIndex(backups []Backup) int {
+	for i, b := range backups {
+		if !b.Safety && b.HasFiles() {
+			return i
+		}
+	}
+	for i, b := range backups {
+		if !b.Safety {
+			return i
+		}
+	}
+	return 0
+}
+
+func safetyStampFile(benchPath, site string) string {
+	return filepath.Join(BackupDir(benchPath, site), ".vybench-safety")
+}
+
+func loadSafetyStamps(benchPath, site string) map[string]bool {
+	out := map[string]bool{}
+	b, err := os.ReadFile(safetyStampFile(benchPath, site))
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			out[line] = true
+		}
+	}
+	return out
+}
+
+func backupStamps(benchPath, site string) map[string]bool {
+	out := map[string]bool{}
+	for _, b := range ListBackups(benchPath, site) {
+		out[b.Stamp] = true
+	}
+	return out
+}
+
+// markNewSafetyBackups records backups that appeared after before, so the
+// restore picker does not offer that automatic copy as the one to restore.
+func markNewSafetyBackups(benchPath, site string, before map[string]bool) error {
+	var fresh []string
+	for _, b := range ListBackups(benchPath, site) {
+		if !before[b.Stamp] {
+			fresh = append(fresh, b.Stamp)
+		}
+	}
+	if len(fresh) == 0 {
+		return nil
+	}
+	known := loadSafetyStamps(benchPath, site)
+	var lines []string
+	for stamp := range known {
+		lines = append(lines, stamp)
+	}
+	for _, stamp := range fresh {
+		if !known[stamp] {
+			lines = append(lines, stamp)
+		}
+	}
+	sort.Strings(lines)
+	return os.WriteFile(safetyStampFile(benchPath, site), []byte(strings.Join(lines, "\n")+"\n"), 0o640)
 }
 
 var backupName = regexp.MustCompile(`^(\d{8}_\d{6})-.+?(-partial)?-(database|files|private-files|site_config_backup)(-enc)?\.(sql\.gz|tar|tgz|json)$`)
@@ -244,6 +320,7 @@ func ListBackups(benchPath, site string) []Backup {
 	if err != nil {
 		return nil
 	}
+	safety := loadSafetyStamps(benchPath, site)
 	byStamp := map[string]*Backup{}
 	for _, e := range entries {
 		m := backupName.FindStringSubmatch(e.Name())
@@ -253,7 +330,7 @@ func ListBackups(benchPath, site string) []Backup {
 		b := byStamp[m[1]]
 		if b == nil {
 			t, _ := time.ParseInLocation("20060102_150405", m[1], time.Local)
-			b = &Backup{Stamp: m[1], Time: t}
+			b = &Backup{Stamp: m[1], Time: t, Safety: safety[m[1]]}
 			byStamp[m[1]] = b
 		}
 		path := filepath.Join(BackupDir(benchPath, site), e.Name())
@@ -367,7 +444,15 @@ func RestoreSpec(benchPath string, o RestoreOptions) (JobSpec, error) {
 		if err != nil {
 			return JobSpec{}, err
 		}
+		before := backupStamps(benchPath, o.Site)
 		steps = append(steps, backup.Steps...)
+		site := o.Site
+		steps = append(steps, Step{
+			Label: "Marking that backup as a safety copy",
+			Fn: func(func(string)) error {
+				return markNewSafetyBackups(benchPath, site, before)
+			},
+		})
 	}
 	cmd, err := BenchCommand(benchPath, args...)
 	if err != nil {

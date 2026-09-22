@@ -215,6 +215,57 @@ func TestInstallSpec(t *testing.T) {
 	}
 }
 
+func TestMaterialiseLinkedTreesThenInstall(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SNAP", "")
+	fakeFPM := filepath.Join(t.TempDir(), "fpm")
+	writeFile(t, fakeFPM, "#!/bin/sh\necho Frappe Package Manager\n")
+	if err := os.Chmod(fakeFPM, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("VYBENCH_FPM", fakeFPM)
+
+	src := t.TempDir()
+	writeFile(t, filepath.Join(src, "marker"), "ok")
+	if err := os.Chmod(src, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(src, 0o755) })
+	bench := t.TempDir()
+	for _, name := range []string{"apps", "env"} {
+		if err := os.Symlink(src, filepath.Join(bench, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := BenchAcceptsApps(bench); err == nil {
+		t.Fatal("a linked bench was accepted before it was copied")
+	}
+
+	c := &FPMClient{RegistryURL: "https://fpm.vyogo.tech"}
+	spec, err := c.InstallSpec(FPMPackage{Org: "frappe", Name: "crm", Version: "1.83.0"}, bench, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Steps[0].Fn == nil {
+		t.Fatal("install did not start by making the linked bench writable")
+	}
+	if err := spec.Steps[0].Fn(func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Lstat(filepath.Join(bench, "apps"))
+	if err != nil || fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("apps is still a symlink: %v", err)
+	}
+	body, err := os.ReadFile(filepath.Join(bench, "apps", "marker"))
+	if err != nil || string(body) != "ok" {
+		t.Fatalf("copied marker = %q, %v", body, err)
+	}
+	if err := BenchAcceptsApps(bench); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFindFPMSkipsRubyFPM(t *testing.T) {
 	t.Setenv("VYBENCH_FPM", "")
 	t.Setenv("SNAP", "")

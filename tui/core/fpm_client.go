@@ -752,12 +752,23 @@ func sameURL(a, b string) bool {
 // InstallSpec returns the job that installs pkg into the bench and, when site
 // is not empty, onto that site (`fpm install --site` runs install-app).
 func (c *FPMClient) InstallSpec(pkg FPMPackage, benchPath, site string) (JobSpec, error) {
-	// Checked before anything is started: an install into a bench whose apps/
-	// and env/ are links into the package gets most of the way through and then
-	// dies on "read-only file system" and rolls back, which says nothing about
-	// what is actually wrong or what to do about it.
+	// A linked bench points apps/ and env/ at the read-only package. Copy those
+	// trees out once, as a job step, so the install can write into them.
+	var prep []Step
 	if err := BenchAcceptsApps(benchPath); err != nil {
-		return JobSpec{}, err
+		if !linkedBench(benchPath) {
+			return JobSpec{}, err
+		}
+		prep = append(prep, Step{
+			Label: "Copying apps and env out of the read-only package",
+			Fn: func(log func(string)) error {
+				log("This is about 1.5 GB and happens once for this bench.")
+				if err := MaterialiseLinkedTrees(benchPath); err != nil {
+					return err
+				}
+				return BenchAcceptsApps(benchPath)
+			},
+		})
 	}
 	fpmBin, err := FindFPM()
 	if err != nil {
@@ -776,7 +787,64 @@ func (c *FPMClient) InstallSpec(pkg FPMPackage, benchPath, site string) (JobSpec
 	cmd := exec.Command(fpmBin, args...)
 	cmd.Dir = benchPath
 	cmd.Env = fpmEnv(benchPath)
-	return JobSpec{Steps: append(steps, Step{Label: label, Cmd: cmd})}, nil
+	return JobSpec{Steps: append(append(prep, steps...), Step{Label: label, Cmd: cmd})}, nil
+}
+
+// linkedBench reports whether apps/ or env/ is a symlink into the package.
+func linkedBench(benchPath string) bool {
+	for _, name := range []string{"apps", "env"} {
+		fi, err := os.Lstat(filepath.Join(benchPath, name))
+		if err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// MaterialiseLinkedTrees replaces symlink trees (apps, env, sites/assets)
+// with real directories copied from their targets. A linked bench cannot
+// take an app install until this has run.
+func MaterialiseLinkedTrees(benchPath string) error {
+	for _, rel := range []string{"apps", "env", filepath.Join("sites", "assets")} {
+		if err := replaceSymlinkWithCopy(filepath.Join(benchPath, rel)); err != nil {
+			return fmt.Errorf("%s: %w", rel, err)
+		}
+	}
+	return nil
+}
+
+func replaceSymlinkWithCopy(path string) error {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		return nil
+	}
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".vybench-copy"
+	_ = os.RemoveAll(tmp)
+	if err := exec.Command("cp", "-a", target, tmp).Run(); err != nil {
+		_ = os.RemoveAll(tmp)
+		return err
+	}
+	if err := os.Remove(path); err != nil {
+		_ = os.RemoveAll(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.RemoveAll(tmp)
+		return err
+	}
+	// The package tree is often not writable. The copy belongs to the account
+	// that made it, so that account must be able to create files in it.
+	return os.Chmod(path, 0o755)
 }
 
 // BenchAcceptsApps reports whether an app can be installed into benchPath, and

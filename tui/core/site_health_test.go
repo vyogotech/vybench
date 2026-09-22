@@ -171,6 +171,37 @@ func TestListBackupsAndFilesNextTo(t *testing.T) {
 	}
 }
 
+func TestPreferredBackupSkipsSafetyCopy(t *testing.T) {
+	bench := t.TempDir()
+	dir := BackupDir(bench, "s.localhost")
+	for _, n := range []string{
+		"20260910_080000-s_localhost-database.sql.gz",
+		"20260910_080000-s_localhost-files.tar",
+		"20260914_120000-s_localhost-database.sql.gz",
+		"20260914_120000-s_localhost-files.tar",
+	} {
+		writeFile(t, filepath.Join(dir, n), "data")
+	}
+	writeFile(t, filepath.Join(dir, ".vybench-safety"), "20260914_120000\n")
+	b := ListBackups(bench, "s.localhost")
+	if len(b) != 2 || !b[0].Safety || b[0].Stamp != "20260914_120000" {
+		t.Fatalf("backups = %+v", b)
+	}
+	if !strings.Contains(b[0].Label(), "safety copy") {
+		t.Errorf("label = %q", b[0].Label())
+	}
+	if got := PreferredBackupIndex(b); got != 1 || b[got].Stamp != "20260910_080000" {
+		t.Fatalf("preferred index %d (%s), want the older copy with files", got, b[got].Stamp)
+	}
+	if err := markNewSafetyBackups(bench, "s.localhost", map[string]bool{"20260910_080000": true}); err != nil {
+		t.Fatal(err)
+	}
+	again := ListBackups(bench, "s.localhost")
+	if !again[0].Safety {
+		t.Fatal("newest backup was not kept as a safety copy")
+	}
+}
+
 func TestRestoreSpec(t *testing.T) {
 	fakeCLI(t)
 	bench := t.TempDir()
@@ -188,10 +219,10 @@ func TestRestoreSpec(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(spec.Steps) != 2 || !slices.Contains(spec.Steps[0].Cmd.Args, "backup") {
+	if len(spec.Steps) != 3 || spec.Steps[0].Cmd == nil || !slices.Contains(spec.Steps[0].Cmd.Args, "backup") || spec.Steps[1].Fn == nil {
 		t.Fatalf("steps %+v", spec.Steps)
 	}
-	args := spec.Steps[1].Cmd.Args
+	args := spec.Steps[2].Cmd.Args
 	i := slices.Index(args, "--site")
 	if i < 0 || !slices.Equal(args[i:], []string{"--site", "s.localhost", "restore", sql, "--force"}) {
 		t.Errorf("args %v", args)

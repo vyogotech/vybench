@@ -112,7 +112,7 @@ func (m JobModel) Update(msg tea.Msg) (JobModel, tea.Cmd) {
 		if msg.id != m.id {
 			return m, nil
 		}
-		m.lines = append(m.lines, msg.lines...)
+		m.lines = core.CollapseProgress(m.lines, msg.lines)
 		if over := len(m.lines) - maxJobLines; over > 0 {
 			m.lines = append([]string(nil), m.lines[over:]...)
 		}
