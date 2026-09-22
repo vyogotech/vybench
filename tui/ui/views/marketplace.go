@@ -234,9 +234,9 @@ func (m MarketplaceModel) Update(msg tea.Msg) (MarketplaceModel, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case detailsMsg:
-	m.details[msg.key] = &detailState{details: msg.details, err: msg.err}
-	m.refreshInspector()
-	return m, nil
+		m.details[msg.key] = &detailState{details: msg.details, err: msg.err}
+		m.refreshInspector()
+		return m, nil
 
 	case fpmVersionMsg:
 		m.fpmVersion = msg.version
@@ -355,8 +355,7 @@ func (m MarketplaceModel) install() tea.Cmd {
 	if site != "" {
 		where = site
 	}
-	return runJob("Install "+pkg.VersionedName(), spec,
-		fmt.Sprintf("Installed %s into %s. Restart services ([r] on Overview) so they load it.", pkg.FullName(), where),
+	return runJob("Install "+pkg.VersionedName(), spec, installedMessage(pkg.FullName(), where, site != ""),
 		AppsChangedMsg{})
 }
 
@@ -650,4 +649,16 @@ func pillBar(cats []string, active string, w int) string {
 		right = theme.StyleMuted.Render("›")
 	}
 	return left + lipgloss.JoinHorizontal(lipgloss.Top, pills[lo:hi+1]...) + right
+}
+
+// installedMessage is the status shown once an app is installed. The running
+// web process loaded its apps when it started, so a site that now has an app
+// the process has not loaded returns HTTP 500 ("No module named ...") until
+// services restart -- measured on a real install. That consequence goes first,
+// because the status line is one row and gets truncated at the right.
+func installedMessage(app, where string, onSite bool) string {
+	if onSite {
+		return fmt.Sprintf("Installed %s on %s. Restart services NOW ([r] on Overview): until then %s returns HTTP 500.", app, where, where)
+	}
+	return fmt.Sprintf("Installed %s into %s. Restart services ([r] on Overview) so they load it.", app, where)
 }

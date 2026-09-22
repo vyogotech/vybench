@@ -21,6 +21,12 @@ type siteCheckMsg struct {
 // siteFailedMsg marks a site whose creation just failed.
 type siteFailedMsg struct{ bench, site string }
 
+// siteCreatedMsg clears that mark once the same site is created (or replaced)
+// successfully. Without it the "last install failed" warning was permanent: a
+// site rebuilt through the form's own recovery path -- and working, and logging
+// in -- still read "Drop it with [d]", inviting the loss of a healthy site.
+type siteCreatedMsg struct{ bench, site string }
+
 // siteScanMsg is one step of the background check of every site: its
 // verdict, and the sites still to check.
 type siteScanMsg struct {
@@ -600,6 +606,13 @@ func (m SitesModel) Update(msg tea.Msg) (SitesModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case siteCreatedMsg:
+		if msg.bench == m.bench.Path {
+			delete(m.failed, msg.site)
+			m.reload()
+		}
+		return m, nil
+
 	case siteCheckMsg:
 		if f := m.form; f != nil && f.checked == msg.bench+"|"+msg.site {
 			c := msg.check
@@ -867,7 +880,7 @@ func (m SitesModel) submitForm() (SitesModel, tea.Cmd) {
 	success += fmt.Sprintf("; add \"127.0.0.1 %s\" to /etc/hosts if it does not resolve.", name)
 	return m, emit(RunJobMsg{
 		Title: title, Spec: spec, Success: success,
-		After:    []tea.Msg{SitesChangedMsg{}, BenchesChangedMsg{}},
+		After:    []tea.Msg{siteCreatedMsg{bench: t.path, site: name}, SitesChangedMsg{}, BenchesChangedMsg{}},
 		Failed:   []tea.Msg{siteFailedMsg{bench: t.path, site: name}},
 		FailHint: "Press [n] and enter the same name to try again: the half-made site is detected and replaced",
 	})
@@ -1009,7 +1022,7 @@ func (m SitesModel) updateInstall(msg tea.KeyMsg) (SitesModel, tea.Cmd) {
 		}
 		m.install = nil
 		return m, runJob("Install "+app+" on "+d.site, spec,
-			"Installed "+app+" on "+d.site+". Restart services ([r] on Overview) so they load it.", SitesChangedMsg{})
+			installedMessage(app, d.site, true), SitesChangedMsg{})
 	}
 	return m, nil
 }
@@ -1255,9 +1268,15 @@ func (m SitesModel) renderForm() string {
 	case f.focus == fieldApps && !f.onLast():
 		keys = theme.StyleMuted.Render("[←→] App  [Space] Toggle  [Tab] Next · more apps: [3] Marketplace")
 	case f.onLast():
+		// Only promise Replace when Force is on. Enter with Force off refuses
+		// (submitForm), so labelling it "Replace site" invited a no-op that
+		// looked like a confirm.
 		verb := "[Enter] Create site"
-		if f.exists {
+		switch {
+		case f.exists && f.force:
 			verb = "[Enter] Replace site"
+		case f.exists:
+			verb = "[Space] Force, then Enter to replace"
 		}
 		keys = theme.StylePrimary.Render(verb) + theme.StyleMuted.Render("  [Tab] Fields  [Esc] Cancel")
 	}

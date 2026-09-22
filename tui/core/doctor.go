@@ -205,6 +205,22 @@ func checkLayout(benchPath string, r *Report) {
 			unlinked = append(unlinked, t)
 		}
 	}
+	appsTxtPath := filepath.Join(benchPath, "sites", "apps.txt")
+
+	// A bench that has never been used. `vybench bench new` creates only the
+	// directories; the snap's wrappers link apps/, env/, sites/assets and
+	// apps.txt the first time a command or service runs on it (bootstrap_common).
+	// So a bench made a minute ago has none of them, and reporting that as a
+	// FAILURE -- exit 1 -- for the product's own output is a false alarm. Only
+	// when ALL of it is absent: any of it present means something was set up and
+	// then damaged, which is a real fault. Snap only, because that is the only
+	// platform whose wrappers link lazily.
+	if DetectPlatform() == PlatformSnap && len(missing) == 0 && len(unlinked) == len(benchTrees) &&
+		!fileExists(appsTxtPath) && !fileExists(filepath.Join(benchPath, "sites", "assets")) {
+		r.add(Finding{Check: "layout", Severity: SevOK,
+			Title: "the bench is new and has not been used yet: its apps are linked the first time a command or service runs on it"})
+		return
+	}
 	if len(unlinked) > 0 {
 		f := Finding{
 			Check:    "layout",

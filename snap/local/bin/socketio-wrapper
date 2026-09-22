@@ -6,13 +6,13 @@ set -e
 bootstrap_common
 # The active bench, resolved by snap-common.sh (current-bench, else the legacy one).
 BENCH_DIR="$LIVE_BENCH"
-cd "$BENCH_DIR"
 
 # Node's realtime server. It resolves node_modules relative to the script's own
 # location (apps/frappe/node_modules), so it must be launched by path from the
 # bench root -- exactly as bench's Procfile does:
 #   socketio: {{ node }} apps/frappe/socketio.js
+# Enter the bench AFTER setpriv (see run_as_daemon_in).
 export PATH="$SNAP/bin:$PATH"
 export NODE_PATH="$BENCH_ROOT/apps/frappe/node_modules"
 
-run_as_daemon "$SNAP/bin/node" "$BENCH_ROOT/apps/frappe/socketio.js"
+run_as_daemon_in "$BENCH_DIR" "$SNAP/bin/node" "$BENCH_ROOT/apps/frappe/socketio.js"

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/x/ansi"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/vyogotech/vybench/tui/core"
 )
 
@@ -240,5 +240,16 @@ func TestMarketplaceFPMVersionAndUpdate(t *testing.T) {
 	}
 }
 
-
-
+func TestInstalledMessageWarnsAboutTheBrokenSite(t *testing.T) {
+	on := installedMessage("frappe/crm", "shop.localhost", true)
+	if !strings.Contains(on, "HTTP 500") || !strings.Contains(on, "shop.localhost") || !strings.Contains(on, "NOW") {
+		t.Fatalf("an install onto a site must say the site breaks until services restart: %q", on)
+	}
+	if strings.Index(on, "Restart") > 60 {
+		t.Fatalf("the instruction must come early: the status line is truncated at the right: %q", on)
+	}
+	bench := installedMessage("frappe/crm", "the bench", false)
+	if strings.Contains(bench, "HTTP 500") {
+		t.Fatalf("a bench-only install breaks no site and must not claim it does: %q", bench)
+	}
+}

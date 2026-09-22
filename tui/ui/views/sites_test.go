@@ -137,7 +137,18 @@ func TestNewSiteKeepsAWorkingSite(t *testing.T) {
 	if m.form.focus != fieldForce {
 		t.Error("focus did not move to Force")
 	}
+	view := ansi.Strip(m.renderForm())
+	if strings.Contains(view, "[Enter] Replace site") {
+		t.Fatalf("footer promised Replace while Force was off:\n%s", view)
+	}
+	if !strings.Contains(view, "Force, then Enter to replace") {
+		t.Fatalf("footer should say to turn on Force first:\n%s", view)
+	}
 	m, _ = m.Update(press(" "))
+	view = ansi.Strip(m.renderForm())
+	if !strings.Contains(view, "[Enter] Replace site") {
+		t.Fatalf("footer should say Replace once Force is on:\n%s", view)
+	}
 	m, msgs = submit(t, m)
 	job, ok := find[RunJobMsg](msgs)
 	if !ok || len(job.Spec.Steps) != 2 {
@@ -597,5 +608,37 @@ func TestAddCustomDomain(t *testing.T) {
 	// test render with error
 	if view := ansi.Strip(m.View(100, 30)); !strings.Contains(view, "spaces") {
 		t.Errorf("expected error in view, got \n%s", view)
+	}
+}
+
+// A site whose creation failed is marked, and the mark must go once the same
+// site is created successfully -- otherwise a healthy, working site keeps
+// telling the user to drop it.
+func TestFailedMarkClearsWhenTheSiteIsRecreated(t *testing.T) {
+	m, bench := sitesFixture(t) // the fixture already has half.localhost
+
+	m, _ = m.Update(siteFailedMsg{bench: bench, site: "half.localhost"})
+	if m.health["half.localhost"] != "last install failed" {
+		t.Fatalf("a failed creation was not marked: %v", m.health)
+	}
+	m, _ = m.Update(siteCreatedMsg{bench: bench, site: "half.localhost"})
+	if got, marked := m.health["half.localhost"]; marked && got == "last install failed" {
+		t.Fatalf("the failure mark survived a successful recreate: %v", m.health)
+	}
+	if m.failed["half.localhost"] {
+		t.Fatal("the failed flag is still set")
+	}
+}
+
+func TestSuccessfulCreateAnnouncesTheSite(t *testing.T) {
+	m, _ := sitesFixture(t)
+	m = openForm(t, m, "ok.localhost")
+	_, msgs := submit(t, m)
+	job, ok := find[RunJobMsg](msgs)
+	if !ok {
+		t.Fatal("no job")
+	}
+	if _, ok := find[siteCreatedMsg](job.After); !ok {
+		t.Error("a successful creation does not clear an earlier failure mark")
 	}
 }

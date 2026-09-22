@@ -42,26 +42,22 @@ bootstrap_common
 # directory when that directory IS a bench, so this is a no-op in the ordinary
 # case; what it fixes is the case where it is not.
 #
-# run_as_daemon drops to snap_daemon with setpriv, which keeps the working
-# directory. A command started somewhere snap_daemon cannot enter -- /root is
-# mode 0700, and root inside a strict snap has no DAC override -- therefore
-# reaches bench with a working directory it cannot stat. bench's
-# is_bench_directory() fails, it never loads frappe's subcommands, and the user
-# sees "WARN: Command not being executed in bench directory" followed by
-# "No such command 'new-site'".
+# Enter the bench AFTER dropping to snap_daemon (run_as_daemon_in). Two reasons:
+# 1. A command started somewhere snap_daemon cannot enter -- /root is mode 0700
+#    -- reaches bench with a cwd it cannot stat. is_bench_directory() fails and
+#    the user sees "No such command 'new-site'".
+# 2. Root inside a strict snap cannot itself cd into a snap_daemon-owned 0770
+#    bench (no DAC override). sudo vybench.bench would fail the same way the
+#    worker services did before run_as_daemon_in.
 #
 # `bench init` is the exception: it creates a bench at the path it is given and
 # must not run from inside another one.
-if [ "${1:-}" != "init" ]; then
-  if ! cd "$LIVE_BENCH" 2>/dev/null; then
-    echo "$SNAP_NAME: cannot enter the bench at $LIVE_BENCH." >&2
-    echo "Check that it exists and is readable by $(id -un): vybench.bench doctor" >&2
-    exit 1
-  fi
+if [ "${1:-}" = "init" ]; then
+  run_as_daemon "$BENCH_PY" "$BENCH_CLI" "$@"
 fi
 
-# Normally this already runs as the invoking host user and run_as_daemon is a
-# plain exec. It only drops privileges when someone runs `sudo vybench.bench`,
+# Normally this already runs as the invoking host user and run_as_daemon_in is a
+# plain cd+exec. It only drops privileges when someone runs `sudo vybench.bench`,
 # which bench would otherwise refuse to do.
-run_as_daemon "$BENCH_PY" \
+run_as_daemon_in "$LIVE_BENCH" "$BENCH_PY" \
   "$BENCH_CLI" "$@"

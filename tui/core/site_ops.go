@@ -161,9 +161,10 @@ func DropSiteSpec(benchPath, site string, force bool, check SiteCheck) (JobSpec,
 	if pw := ResolveMariaDBRootPassword(benchPath, ""); pw != "" {
 		args = append(args, "--mariadb-root-password", pw)
 	}
-	if sock := resolveMariaDBSocket(benchPath); sock != "" {
-		args = append(args, "--db-socket", sock)
-	}
+	// No --db-socket: `bench drop-site` does not accept it (only new-site does),
+	// so passing it made every drop fail with "No such option" before touching
+	// anything. It reads the socket from common_site_config.json. Pinned per
+	// subcommand by TestSpecFlagsExistInRealBench.
 	label := "Dropping " + site + " (bench backs it up first)"
 	if force {
 		args = append(args, "--force")

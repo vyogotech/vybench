@@ -1,0 +1,103 @@
+{
+ "_frappe_version": "5.31.0",
+ "_note": "Captured from `vybench.bench <cmd> --help` on the snap (rev x1). Ground truth for TestSpecFlagsExistInRealBench. Global flags (--site, --help) are handled in the test.",
+ "backup": [
+  "--backup-path",
+  "--backup-path-conf",
+  "--backup-path-db",
+  "--backup-path-files",
+  "--backup-path-private-files",
+  "--compress",
+  "--exclude",
+  "--help",
+  "--ignore-backup-conf",
+  "--include",
+  "--old-backup-metadata",
+  "--only",
+  "--verbose",
+  "--with-files"
+ ],
+ "drop-site": [
+  "--archived-sites-path",
+  "--db-root-password",
+  "--db-root-username",
+  "--force",
+  "--help",
+  "--mariadb-root-password",
+  "--mariadb-root-username",
+  "--no-backup",
+  "--root-login",
+  "--root-password"
+ ],
+ "init": [
+  "--apps",
+  "--clone-from",
+  "--clone-without-update",
+  "--dev",
+  "--frappe-branch",
+  "--frappe-path",
+  "--help",
+  "--ignore-exist",
+  "--install-app",
+  "--no-backups",
+  "--no-procfile",
+  "--python",
+  "--skip-assets",
+  "--skip-redis-config-generation",
+  "--verbose",
+  "--version"
+ ],
+ "install-app": [
+  "--force",
+  "--help"
+ ],
+ "list-apps": [
+  "--format",
+  "--help"
+ ],
+ "new-site": [
+  "--admin-password",
+  "--db-host",
+  "--db-name",
+  "--db-password",
+  "--db-port",
+  "--db-root-password",
+  "--db-root-username",
+  "--db-socket",
+  "--db-type",
+  "--db-user",
+  "--force",
+  "--help",
+  "--install-app",
+  "--mariadb-db-socket",
+  "--mariadb-root-password",
+  "--mariadb-root-username",
+  "--mariadb-user-host-login-scope",
+  "--no-mariadb-socket",
+  "--set-default",
+  "--setup-db",
+  "--source",
+  "--source-sql",
+  "--verbose"
+ ],
+ "restore": [
+  "--admin-password",
+  "--db-name",
+  "--db-root-password",
+  "--db-root-username",
+  "--encryption-key",
+  "--force",
+  "--help",
+  "--install-app",
+  "--mariadb-root-password",
+  "--mariadb-root-username",
+  "--with-private-files",
+  "--with-public-files"
+ ],
+ "setup add-domain": [
+  "--help",
+  "--site",
+  "--ssl-certificate",
+  "--ssl-certificate-key"
+ ]
+}

@@ -627,3 +627,39 @@ func TestDoctorBackupToolsFileWithoutMagicDatabase(t *testing.T) {
 		t.Fatalf("missing magic database not reported: %+v", r.Findings)
 	}
 }
+
+// `vybench bench new` makes only the directories; the snap links apps/, env/
+// and apps.txt on first use. doctor must not report that as a failure.
+func TestDoctorFreshBenchIsNotAFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("SNAP", t.TempDir()) // DetectPlatform() == snap
+	bench := t.TempDir()
+	for _, d := range []string{"sites", "config/pids", "logs"} {
+		if err := os.MkdirAll(filepath.Join(bench, d), 0o775); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var r Report
+	checkLayout(bench, &r)
+	if len(r.Findings) != 1 || r.Findings[0].Severity != SevOK || !strings.Contains(r.Findings[0].Title, "new") {
+		t.Fatalf("a never-used bench was not recognised: %+v", r.Findings)
+	}
+}
+
+// The leniency is for a bench with NOTHING set up. Anything present means it
+// was set up and then damaged, which is a real fault.
+func TestDoctorPartlyLinkedBenchIsStillAFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("SNAP", t.TempDir())
+	bench := t.TempDir()
+	for _, d := range []string{"sites", "config/pids", "logs", "env"} { // env present, apps gone
+		if err := os.MkdirAll(filepath.Join(bench, d), 0o775); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var r Report
+	checkLayout(bench, &r)
+	if !hasTitle(r, "has no apps") {
+		t.Fatalf("a damaged bench (env present, apps missing) was excused as new: %+v", r.Findings)
+	}
+}

@@ -188,8 +188,21 @@ if [ ! -d "$BENCH/sites" ]; then
   exit 1
 fi
 
-# Always change directory to the bench so unprivileged execution doesn't fail on restricted CWD
-cd "$BENCH"
+# Enter the bench as snap_daemon. Root cannot cd into a 0770 snap_daemon-owned
+# bench under confinement (see run_as_daemon_in); when already unprivileged the
+# helper is a plain cd. Restricted CWDs (/root) are why we must enter at all.
+if command -v run_as_daemon_in >/dev/null 2>&1 && [ "$(id -u)" = "0" ]; then
+  # Re-exec the rest of this script from inside the bench as snap_daemon so the
+  # subsequent fpm invocations inherit a usable cwd without each one wrapping.
+  export_daemon_runtime_dirs 2>/dev/null || true
+  exec setpriv --reuid="$DAEMON_USER" --regid="$DAEMON_USER" --clear-groups \
+    bash -c 'cd "$1" || exit 1; shift; exec "$0" "$@"' "$0" "$BENCH" "$@"
+fi
+if ! cd "$BENCH" 2>/dev/null; then
+  echo "vybench.fpm: cannot enter the bench at $BENCH" >&2
+  exit 1
+fi
+
 
 # --bench-path is supplied unless the caller named one, so `vybench.fpm install
 # frappe/crm==1.82.0` does the obvious thing.

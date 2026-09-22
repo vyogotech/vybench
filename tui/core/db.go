@@ -238,7 +238,9 @@ func Diagnose(lines []string) string {
 		// database was never created there.
 		return "The site's own database login does not exist: its install never finished. Drop it with [d] or create it again with [n]"
 	case has("(1045", "access denied for user"):
-		return "The database refused the login; check root_password and db_socket in common_site_config.json"
+		// Most often the DB root password typed into the dialog. Leaving that
+		// field blank makes vybench use its own managed one, which is the usual fix.
+		return "The database refused the login. If you typed a DB root password in the dialog it is wrong: leave that field blank to use vybench's own. Otherwise check root_password and db_socket in common_site_config.json"
 	case has("already exists, use `--force`"):
 		return "The site already exists; turn on Force to replace it"
 	case has("do you want to continue anyway", "downgrade"):

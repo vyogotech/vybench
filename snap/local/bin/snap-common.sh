@@ -431,6 +431,26 @@ run_as_daemon() {
   exec "$@"
 }
 
+# Like run_as_daemon, but enters $1 as the working directory before exec'ing
+# the rest. The cd MUST happen after setpriv: bootstrap_common's share_mode
+# leaves the bench at 0770 owned by snap_daemon, and root inside a strict snap
+# has no CAP_DAC_OVERRIDE, so `cd "$LIVE_BENCH"` as root fails with
+# "Permission denied". Measured on the appliance: the first service to start
+# after a bench switch wins (cd while still 0775, then strips other bits);
+# worker / socketio / watch then die in a restart loop. web-wrapper already
+# avoided this by passing gunicorn --chdir after setpriv; this helper is the
+# same idea for every other service and for `sudo vybench.bench`.
+run_as_daemon_in() {
+  local dir="$1"; shift
+  if [ "$(id -u)" = "0" ]; then
+    export_daemon_runtime_dirs
+    exec setpriv --reuid="$DAEMON_USER" --regid="$DAEMON_USER" --clear-groups \
+      bash -c 'cd "$1" || exit 1; shift; exec "$@"' bash "$dir" "$@"
+  fi
+  cd "$dir" || exit 1
+  exec "$@"
+}
+
 # Re-exec the calling script itself as snap_daemon, so that every command after
 # this point runs unprivileged. Use this instead of run_as_daemon when a wrapper
 # has to run several commands unprivileged (e.g. mariadb-install-db then
