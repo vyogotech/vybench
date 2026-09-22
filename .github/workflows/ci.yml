@@ -257,7 +257,25 @@ jobs:
             --db-root-username root --db-root-password "$CI_DB_PW" --force
           curl -f -I http://ci.localhost:8000/ || curl -f -I -H "Host: ci.localhost" http://127.0.0.1:8000/
 
-          # 5. Verify Multi-Bench creation
+          # 5. Doctor on the active Homebrew bench (MariaDB)
+          vybench doctor --offline
+
+          # 6. PostgreSQL runtime via the same vybench binary (no vypgbench)
+          brew install postgresql@16
+          export PATH="$(brew --prefix)/opt/postgresql@16/bin:$PATH"
+          brew services start postgresql@16
+          for _i in $(seq 1 60); do pg_isready -h 127.0.0.1 && break; sleep 1; done
+          pg_isready -h 127.0.0.1 || { echo "::error::PostgreSQL not ready on 127.0.0.1:5432"; exit 1; }
+          createuser -s postgres 2>/dev/null || true
+          psql -h 127.0.0.1 -d postgres -v ON_ERROR_STOP=1 -c "ALTER USER postgres WITH PASSWORD 'pgci';" \
+            || psql -h 127.0.0.1 -d postgres -v ON_ERROR_STOP=1 -c "CREATE USER postgres SUPERUSER PASSWORD 'pgci';"
+          vybench bench new pgci --db postgres --switch=true
+          vybench bench new-site pg.localhost --admin-password admin \
+            --db-type postgres --db-root-username postgres --db-root-password pgci --force
+          vybench doctor --offline
+          vybench bench list | grep -q pgci
+
+          # 7. Verify Multi-Bench creation (secondary linked-style bench)
           vybench bench init /tmp/ci-secondary-bench --frappe-branch version-16 --skip-redis-config-generation --no-backups --skip-assets
           cd /tmp/ci-secondary-bench && vybench bench version
 
