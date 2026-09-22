@@ -119,7 +119,26 @@ try:
 except OSError:
     sys.exit(1)' "$1" 2>/dev/null
 }
-export MYSQL_UNIX_PORT="$MYSQL_SOCKET"
+# MYSQL_UNIX_PORT doubles as `bench new-site`'s --db-socket envvar fallback
+# (frappe's new-site click option declares envvar="MYSQL_UNIX_PORT"). Exporting
+# it unconditionally leaks vybench's MariaDB socket into a PostgreSQL bench's
+# site_config.json; libpq then dials "<mariadb-socket>/.s.PGSQL.<port>", which
+# is not a directory, and every postgres new-site/restore fails. Homebrew can
+# run mariadb and postgres benches side by side, so check the active bench's
+# own db_type (not just this snap/formula variant) before exporting it.
+_vb_active_db_type() {
+  [ -f "$BENCH_ROOT/sites/common_site_config.json" ] || { echo mariadb; return; }
+  [ -x "$PYTHON" ] || { echo mariadb; return; }
+  "$PYTHON" -c 'import json,sys
+try:
+    with open(sys.argv[1]) as fh:
+        print(json.load(fh).get("db_type") or "mariadb")
+except Exception:
+    print("mariadb")' "$BENCH_ROOT/sites/common_site_config.json" 2>/dev/null
+}
+if [ "$(_vb_active_db_type)" != "postgres" ]; then
+  export MYSQL_UNIX_PORT="$MYSQL_SOCKET"
+fi
 
 # Git safe.directory — avoids "dubious ownership" errors
 export GIT_CONFIG_COUNT=1

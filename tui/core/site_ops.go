@@ -80,6 +80,14 @@ func NewSiteSpec(benchPath string, o NewSiteOptions) (JobSpec, error) {
 		if o.DBRootPassword != "" {
 			args = append(args, "--db-root-password", o.DBRootPassword)
 		}
+		// bench new-site's --db-socket falls back to the MYSQL_UNIX_PORT
+		// envvar when the flag is omitted, and every platform wrapper
+		// (Homebrew's vybench-common.sh, the snap's mariadb variant) exports
+		// that unconditionally for its own MariaDB socket. Without this, a
+		// postgres site inherits that path and libpq tries to dial
+		// "<mariadb-socket>/.s.PGSQL.<port>", which is not a directory.
+		// An explicit empty value on the command line beats the envvar.
+		args = append(args, "--db-socket", "")
 	} else if engine == "mariadb" {
 		if pw := ResolveMariaDBRootPassword(benchPath, o.DBRootPassword); pw != "" {
 			args = append(args, "--mariadb-root-password", pw)

@@ -39,8 +39,16 @@ func TestNewSiteSpec(t *testing.T) {
 	}
 	args = spec.Steps[0].Cmd.Args
 	if !slices.Contains(args, "--db-root-username") || args[slices.Index(args, "--db-root-username")+1] != "postgres" ||
-		args[len(args)-1] != "root" {
+		!slices.Contains(args, "--db-root-password") || args[slices.Index(args, "--db-root-password")+1] != "root" {
 		t.Errorf("postgres args = %v", args)
+	}
+	// bench new-site's --db-socket falls back to the MYSQL_UNIX_PORT envvar
+	// when omitted, and every wrapper exports that for its own MariaDB
+	// socket. Without an explicit override, a postgres site would inherit
+	// the mariadb socket path and libpq would try to dial
+	// "<mariadb-socket>/.s.PGSQL.<port>". See CHANGELOG / commit history.
+	if i := slices.Index(args, "--db-socket"); i < 0 || args[i+1] != "" {
+		t.Errorf("postgres new-site must defeat the MYSQL_UNIX_PORT envvar fallback with an explicit empty --db-socket, got %v", args)
 	}
 
 	if _, err := NewSiteSpec(bench, NewSiteOptions{Name: "b.localhost"}); err == nil {

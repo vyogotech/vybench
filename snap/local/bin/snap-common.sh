@@ -69,7 +69,25 @@ export PYTHONPATH="$BENCH_ROOT/apps/frappe:$BENCH_ROOT/env/lib/python3.14/site-p
 # directory is world-traversable so any local user can connect without being
 # added to a group. Connecting is not authorisation -- MariaDB still demands the
 # generated root password -- so an open socket costs nothing.
-if [ ! -f "$SNAP/bin/postgres-wrapper" ] && [ ! -d "$SNAP/usr/lib/postgresql" ]; then
+# MYSQL_UNIX_PORT doubles as `bench new-site`'s --db-socket envvar fallback
+# (frappe's new-site click option declares envvar="MYSQL_UNIX_PORT"). Exporting
+# it whenever this merely isn't the bundled-postgres snap variant still leaks
+# vybench's own MariaDB socket into a bench whose db_type is postgres (talking
+# to an external server over TCP): libpq then dials
+# "<mariadb-socket>/.s.PGSQL.<port>", which is not a directory. Check the
+# active bench's own config, not just the snap variant.
+_vb_active_db_type() {
+  local cfg="$LIVE_BENCH/sites/common_site_config.json"
+  [ -f "$cfg" ] || { echo mariadb; return; }
+  [ -x "$BENCH_PY" ] || { echo mariadb; return; }
+  "$BENCH_PY" -c 'import json,sys
+try:
+    with open(sys.argv[1]) as fh:
+        print(json.load(fh).get("db_type") or "mariadb")
+except Exception:
+    print("mariadb")' "$cfg" 2>/dev/null
+}
+if [ ! -f "$SNAP/bin/postgres-wrapper" ] && [ ! -d "$SNAP/usr/lib/postgresql" ] && [ "$(_vb_active_db_type)" != "postgres" ]; then
   export MYSQL_UNIX_PORT="$SNAP_COMMON/run/mysql.sock"
 fi
 export PGHOST="$SNAP_COMMON/run"
