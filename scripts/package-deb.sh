@@ -212,6 +212,14 @@ if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
   systemctl disable 'frappe-worker@*.service' >/dev/null 2>&1 || true
   systemctl disable frappe-web.service frappe-scheduler.service \
                     frappe-socketio.service vybench.target >/dev/null 2>&1 || true
+
+  # Python writes __pycache__ next to the shipped modules the first time the
+  # bench runs. Those files are not in the package, so dpkg then refuses to
+  # remove the parent directories. Delete them before dpkg removes its files.
+  if [ -d /opt/frappe-bench ]; then
+    find /opt/frappe-bench -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
+    find /opt/frappe-bench -type f -name '*.pyc' -delete 2>/dev/null || true
+  fi
 fi
 
 exit 0
@@ -244,14 +252,39 @@ case "$1" in
     ;;
 esac
 
-# Sites, uploaded files and databases are NOT removed, on remove or on purge.
-# They are not package files, they are the user's data, and dpkg has no way to
-# tell the difference between "uninstalling" and "about to reinstall".
-if [ "$1" = "purge" ] && [ -d /opt/frappe-bench/sites ]; then
-  cat <<'MSG'
-Site data is still in /opt/frappe-bench/sites, and the databases are still in
-MariaDB. Remove them by hand if you meant to.
-MSG
+# `remove` keeps sites so a reinstall can pick them up. `purge` means the
+# admin asked for the data to go too: site files, the databases those sites
+# named, and the frappe_admin account vybench-setup created.
+if [ "$1" = "purge" ]; then
+  BENCH=/opt/frappe-bench
+  if command -v mysql >/dev/null 2>&1 && [ -d "$BENCH/sites" ]; then
+    for cfg in "$BENCH"/sites/*/site_config.json; do
+      [ -f "$cfg" ] || continue
+      db="$(python3 -c 'import json,sys
+try:
+    name=json.load(open(sys.argv[1])).get("db_name") or ""
+except Exception:
+    name=""
+print(name)' "$cfg" 2>/dev/null || true)"
+      case "$db" in
+        ""|*[!A-Za-z0-9_]*) continue ;;
+      esac
+      mysql --protocol=socket -u root -e "DROP DATABASE IF EXISTS \`$db\`" >/dev/null 2>&1 || true
+    done
+    mysql --protocol=socket -u root <<'SQL' >/dev/null 2>&1 || true
+DROP USER IF EXISTS 'frappe_admin'@'localhost';
+DROP USER IF EXISTS 'frappe_admin'@'127.0.0.1';
+FLUSH PRIVILEGES;
+SQL
+  fi
+
+  rm -rf "$BENCH"
+  if getent passwd frappe >/dev/null 2>&1; then
+    userdel frappe >/dev/null 2>&1 || true
+  fi
+  if getent group frappe >/dev/null 2>&1; then
+    groupdel frappe >/dev/null 2>&1 || true
+  fi
 fi
 
 exit 0
