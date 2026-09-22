@@ -266,9 +266,28 @@ PYEOF
 # Run a single command as snap_daemon if invoked by root, otherwise run directly.
 # Used by hooks and helpers to modify files in $SNAP_COMMON/bench without hitting
 # AppArmor dac_override denials (since root lacks DAC override in strict snaps).
+#
+# cd to $SNAP_COMMON (created by snapd itself, always 0755 root:root, so both
+# root and snap_daemon can enter it) before dropping privileges. Some
+# subcommands -- find, in particular, for both its GNU and BusyBox builds --
+# chdir() back to their starting directory internally even when given only
+# absolute paths (GNU find's directory-traversal optimisation; it does this to
+# resume the parent traversal after descending). materialise_bench's every
+# caller here runs as root with cwd=/root (the default over an SSH
+# provisioning session, e.g. Packer's shell provisioner) or wherever the
+# invoking hook happened to start; snap_daemon has no access to /root, so
+# `setpriv --reuid=snap_daemon find /some/absolute/path -exec ... {} +` fails
+# outright with EACCES restoring its cwd -- *before running any -exec action*
+# -- and every caller wraps this in `|| true`, so it fails silently. Measured
+# on the appliance: this is why materialise_bench's belt-and-suspenders .pth
+# rewrite never actually ran, and `vybench doctor` flagged frappe.pth/
+# erpnext.pth pointing at the read-only squashfs on every fresh install.
 as_daemon() {
   if [ "$(id -u)" = "0" ]; then
-    setpriv --reuid="$DAEMON_USER" --regid="$DAEMON_USER" --clear-groups "$@"
+    (
+      cd "$SNAP_COMMON" 2>/dev/null || cd /
+      setpriv --reuid="$DAEMON_USER" --regid="$DAEMON_USER" --clear-groups "$@"
+    )
   else
     "$@"
   fi
@@ -288,8 +307,25 @@ materialise_bench() {
   local B="${1:-$LIVE_BENCH}"
   local SRC="$SNAP/opt/frappe-bench"
 
+  # Every existence check below is a plain `[ ... ]`, which runs as root. On
+  # a machine's very first materialise, $B is still root-owned (bootstrap_common
+  # only just `mkdir -p`'d it) so that is harmless, but this function's own
+  # chown+share_mode at the bottom hands $B to snap_daemon:snap_daemon 0770 --
+  # and root has no CAP_DAC_OVERRIDE in a strict snap, so it cannot even
+  # traverse into a directory it does not own or belong to the group of.
+  # Every one of these tests then silently reads as "does not exist" (EACCES
+  # is indistinguishable from ENOENT to `[ -d ... ]`) instead of erroring.
+  # Measured on the appliance: this made every materialise_bench call after
+  # the first one believe apps/ and env/ were never materialised, wipe and
+  # re-copy ~1GB from squashfs every time, and skip the .pth rewrite below
+  # forever (its own guard condition read as false the same way) -- so
+  # frappe.pth/erpnext.pth kept pointing at the read-only squashfs on every
+  # fresh install, which `vybench doctor` correctly flags. Route every test
+  # (and write) under $B through snap_daemon instead.
+  daemon_test() { as_daemon test "$@"; }
+
   for tree in apps env; do
-    if [ ! -d "$B/$tree" ] || [ -L "$B/$tree" ]; then
+    if ! daemon_test -d "$B/$tree" || daemon_test -L "$B/$tree"; then
       echo "materialising $tree/ (this takes a moment)..."
       as_daemon rm -rf "$B/$tree"
       as_daemon cp -a "$SRC/$tree" "$B/$tree"
@@ -298,13 +334,13 @@ materialise_bench() {
 
   # sites/assets holds RELATIVE symlinks (../../apps/<app>/<app>/public), so once
   # copied they resolve against the materialised apps/ automatically.
-  if [ -L "$B/sites/assets" ]; then
+  if daemon_test -L "$B/sites/assets"; then
     as_daemon rm -f "$B/sites/assets"
     as_daemon cp -a "$SRC/sites/assets" "$B/sites/assets"
   fi
 
   # Ensure db_type is postgres in common_site_config.json when running under postgres snap
-  if [ -f "$B/sites/common_site_config.json" ] && [ -f "$SNAP/bin/postgres-wrapper" ]; then
+  if daemon_test -f "$B/sites/common_site_config.json" && [ -f "$SNAP/bin/postgres-wrapper" ]; then
     as_daemon "$SNAP/opt/frappe-bench/env/bin/python3.14" - "$B/sites/common_site_config.json" <<'PYEOF' || true
 import json, sys
 path = sys.argv[1]
@@ -324,16 +360,16 @@ PYEOF
   # /var/snap/vybench/usr/bin from the copied location -- a dangling link that
   # breaks every bench command. Re-point it absolutely at the bundled interpreter.
   # Also rewrite build-time shebangs (#!/build/vybench/...) to #!/usr/bin/env python3.
-  if [ -d "$B/env/bin" ]; then
+  if daemon_test -d "$B/env/bin"; then
     as_daemon ln -sfn "$SNAP_STABLE/usr/bin/python3.14" "$B/env/bin/python3.14"
     as_daemon ln -sfn python3.14 "$B/env/bin/python3"
     as_daemon ln -sfn python3.14 "$B/env/bin/python"
     as_daemon find "$B/env/bin" -type f -exec sed -i "1s|^#!/.*/python.*|#!$B/env/bin/python3|" {} + 2>/dev/null || true
-    [ -e "$B/env/bin/python3.14" ] || echo "WARNING: materialised venv python is dangling" >&2
+    daemon_test -e "$B/env/bin/python3.14" || echo "WARNING: materialised venv python is dangling" >&2
   fi
 
   # Rewrite build-time part install paths in site-packages pth/egg-link files to point to $B
-  if [ -d "$B/env/lib/python3.14/site-packages" ]; then
+  if daemon_test -d "$B/env/lib/python3.14/site-packages"; then
     SP="$B/env/lib/python3.14/site-packages"
     # First pass: rewrite explicit known build-time paths
     as_daemon find "$SP" -type f \( -name "*.pth" -o -name "*.py" -o -name "*.egg-link" \) \
@@ -350,7 +386,7 @@ PYEOF
     # Belt-and-suspenders: forcibly rewrite the two known editable-install .pth files
     for APP in frappe erpnext hrms; do
       PTH="$SP/${APP}.pth"
-      [ -f "$PTH" ] && sed -i "s|/snap/${SNAP_NAME}/current/opt/frappe-bench/apps/${APP}|$B/apps/${APP}|g" "$PTH" 2>/dev/null || true
+      daemon_test -f "$PTH" && as_daemon sed -i "s|/snap/${SNAP_NAME}/current/opt/frappe-bench/apps/${APP}|$B/apps/${APP}|g" "$PTH" 2>/dev/null || true
     done
   fi
 
@@ -358,8 +394,8 @@ PYEOF
   # Under snap confinement (and unprivileged snap_daemon execution), ioprio_set(2)
   # is blocked by AppArmor/seccomp, raising SubprocessError: Exception occurred in preexec_fn.
   FRAPPE_CMDS="$B/apps/frappe/frappe/commands/__init__.py"
-  if [ -f "$FRAPPE_CMDS" ]; then
-    python3 -c "
+  if daemon_test -f "$FRAPPE_CMDS"; then
+    as_daemon python3 -c "
 import re
 path = '$FRAPPE_CMDS'
 try:
@@ -383,9 +419,15 @@ except Exception:
   if [ "$(id -u)" = "0" ]; then
     chown -R "$DAEMON_USER:$DAEMON_USER" "$B" 2>/dev/null || true
   fi
-  # Group-shared, not world-readable -- same rule as bootstrap_common.
-  chmod -R ug+rwX,o-rwx "$B" 2>/dev/null || true
-  find "$B" -type d -exec chmod g+s {} + 2>/dev/null || true
+  # Group-shared, not world-readable -- same rule as bootstrap_common. Once $B
+  # is 0770 snap_daemon-owned from a prior run, root can no longer traverse
+  # into it (see daemon_test above) and these three would silently no-op on
+  # every call after the first -- harmless for files chown -R already fixed
+  # up, but it would leave a freshly re-copied apps/env (still at whatever
+  # squashfs inherited via cp -a) short of the "not world-readable" intent.
+  # as_daemon runs as the owner, so it always has access regardless.
+  as_daemon chmod -R ug+rwX,o-rwx "$B" 2>/dev/null || true
+  as_daemon find "$B" -type d -exec chmod g+s {} + 2>/dev/null || true
 }
 
 # In developer mode the bench belongs to the developer, so this never trips.
