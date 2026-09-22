@@ -278,19 +278,8 @@ jobs:
           PG_BENCH="$(brew --prefix)/var/vybench-local/benches/pgci"
           # Pin the postgres bench and strip any inherited MariaDB socket so
           # frappe's postgres path talks TCP to 127.0.0.1:5432.
-          python3 - "$PG_BENCH/sites/common_site_config.json" <<'PY'
-import json, sys
-path = sys.argv[1]
-with open(path) as fh:
-    cfg = json.load(fh)
-cfg["db_type"] = "postgres"
-cfg["db_host"] = "127.0.0.1"
-cfg["db_port"] = 5432
-cfg.pop("db_socket", None)
-with open(path, "w") as fh:
-    json.dump(cfg, fh, indent=2)
-print(cfg)
-PY
+          python3 -c 'import json,sys; p=sys.argv[1]; cfg=json.load(open(p)); cfg.update({"db_type":"postgres","db_host":"127.0.0.1","db_port":5432}); cfg.pop("db_socket",None); json.dump(cfg, open(p,"w"), indent=2); print(cfg)' \
+            "$PG_BENCH/sites/common_site_config.json"
           export VYBENCH_BENCH="$PG_BENCH"
           unset MYSQL_UNIX_PORT
           vybench bench new-site pg.localhost --admin-password admin \
