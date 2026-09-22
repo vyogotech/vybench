@@ -262,7 +262,8 @@ jobs:
 
           # 6. PostgreSQL runtime via the same vybench binary (no vypgbench)
           brew install postgresql@16
-          export PATH="$(brew --prefix)/opt/postgresql@16/bin:$PATH"
+          PG_BIN="$(brew --prefix)/opt/postgresql@16/bin"
+          export PATH="$PG_BIN:$PATH"
           brew services start postgresql@16
           for _i in $(seq 1 60); do pg_isready -h 127.0.0.1 && break; sleep 1; done
           pg_isready -h 127.0.0.1 || { echo "::error::PostgreSQL not ready on 127.0.0.1:5432"; exit 1; }
