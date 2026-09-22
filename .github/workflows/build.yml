@@ -1,20 +1,15 @@
 name: Build Packages
 
-# Three triggers:
+# Native packages (.deb) and APT publishing run here.
 #
-#   1. Push to main (path-filtered) — selective build: only the snap or deb
-#      package whose source files actually changed is rebuilt. A snap-only edit
-#      never queues a 2-hour deb build, and vice versa.
+# Snap images are built and published by Snapcraft.io (webhook on push to main).
+# Do not duplicate snap builds in this workflow — it wastes hours of runner time
+# and races the store pipeline.
 #
-#   2. Tags (v*) — full release build: all snaps (vybench + vypgbench), all deb
-#      distros, arm64 included. Publishes snaps to their store entries when
-#      `publish_snap` is true.
-#      NOTE: the `paths` filter below also applies to tag pushes. Release tags
-#      target commits that change packaging code, so this is always satisfied.
-#      Use `workflow_dispatch` to force a full build if not.
-#
-#   3. workflow_dispatch — manual trigger; `force_full=true` rebuilds everything
-#      regardless of what changed.
+# Triggers:
+#   1. Push to main (path-filtered) — rebuild debs when native packaging changes.
+#   2. Tags (v*) — release build: all deb distros (+ arm64), APT publish, GitHub release.
+#   3. workflow_dispatch — manual deb rebuild; `force_full=true` ignores path filters.
 #
 # Iterate locally with scripts/build-bench-payload.sh -- it is the same code path.
 on:
@@ -22,10 +17,6 @@ on:
     branches: [main]
     tags: ['v*']
     paths:
-      - 'snap/snapcraft.yaml'          # vybench (mariadb)
-      - 'snap/snapcraft.postgres.yaml' # vypgbench (postgres)
-      - 'snap/local/**'               # shared snap wrappers — triggers both snaps
-      - 'snap/hooks/**'               # shared snap hooks — triggers both snaps
       - 'scripts/build-bench-payload.sh'
       - 'scripts/package-deb.sh'
       - 'scripts/package-rpm.sh'
@@ -43,13 +34,8 @@ on:
         type: boolean
         required: false
         default: false
-      publish_snap:
-        description: 'Publish the snap to the Snap Store'
-        type: boolean
-        required: false
-        default: false
       force_full:
-        description: 'Build all packages regardless of what changed'
+        description: 'Build all deb packages regardless of what changed'
         type: boolean
         required: false
         default: true
@@ -74,8 +60,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      snap_mariadb: ${{ steps.flags.outputs.snap_mariadb }}
-      snap_postgres: ${{ steps.flags.outputs.snap_postgres }}
       deb: ${{ steps.flags.outputs.deb }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -84,14 +68,6 @@ jobs:
         if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
         with:
           filters: |
-            snap_mariadb:
-              - 'snap/snapcraft.yaml'
-              - 'snap/local/**'
-              - 'snap/hooks/**'
-            snap_postgres:
-              - 'snap/snapcraft.postgres.yaml'
-              - 'snap/local/**'
-              - 'snap/hooks/**'
             deb:
               - 'scripts/build-bench-payload.sh'
               - 'scripts/package-deb.sh'
@@ -105,17 +81,9 @@ jobs:
           if [ "$FORCE" = "true" ] || \
              [ "${{ github.event_name }}" != "push" ] || \
              [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
-            {
-              echo "snap_mariadb=true"
-              echo "snap_postgres=true"
-              echo "deb=true"
-            } >> "$GITHUB_OUTPUT"
+            echo "deb=true" >> "$GITHUB_OUTPUT"
           else
-            {
-              echo "snap_mariadb=${{ steps.filter.outputs.snap_mariadb }}"
-              echo "snap_postgres=${{ steps.filter.outputs.snap_postgres }}"
-              echo "deb=${{ steps.filter.outputs.deb }}"
-            } >> "$GITHUB_OUTPUT"
+            echo "deb=${{ steps.filter.outputs.deb }}" >> "$GITHUB_OUTPUT"
           fi
 
   # ---------------------------------------------------------------------------
@@ -127,9 +95,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      snap: ${{ steps.plan.outputs.snap }}
       deb: ${{ steps.plan.outputs.deb }}
-      has_snap: ${{ steps.plan.outputs.has_snap }}
       has_deb: ${{ steps.plan.outputs.has_deb }}
     steps:
       - id: plan
@@ -148,8 +114,6 @@ jobs:
           [ -n "$ARM_RUNNER" ] || ARM_RUNNER='"ubuntu-24.04-arm"'
           case "$ARM_RUNNER" in '['*|'"'*) ;; *) ARM_RUNNER="\"$ARM_RUNNER\"" ;; esac
 
-          BUILD_MARIADB="${{ needs.changes.outputs.snap_mariadb }}"
-          BUILD_POSTGRES="${{ needs.changes.outputs.snap_postgres }}"
           BUILD_DEB="${{ needs.changes.outputs.deb }}"
 
           # Include arm64 entries on tag releases or when explicitly requested.
@@ -158,22 +122,6 @@ jobs:
              [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
             FULL_ARCH=true
           fi
-
-          # Build snap matrix -- one entry per (snap, arch) combination.
-          SNAP_ENTRIES=""
-          if [ "$BUILD_MARIADB" = "true" ]; then
-            SNAP_ENTRIES="${SNAP_ENTRIES:+$SNAP_ENTRIES,}{\"arch\":\"amd64\",\"runner\":\"ubuntu-24.04\",\"file\":\"snap/snapcraft.yaml\",\"flavor\":\"mariadb\"}"
-            if [ "$FULL_ARCH" = "true" ]; then
-              SNAP_ENTRIES="${SNAP_ENTRIES},{\"arch\":\"arm64\",\"runner\":$ARM_RUNNER,\"file\":\"snap/snapcraft.yaml\",\"flavor\":\"mariadb\"}"
-            fi
-          fi
-          if [ "$BUILD_POSTGRES" = "true" ]; then
-            SNAP_ENTRIES="${SNAP_ENTRIES:+$SNAP_ENTRIES,}{\"arch\":\"amd64\",\"runner\":\"ubuntu-24.04\",\"file\":\"snap/snapcraft.postgres.yaml\",\"flavor\":\"postgres\"}"
-            if [ "$FULL_ARCH" = "true" ]; then
-              SNAP_ENTRIES="${SNAP_ENTRIES},{\"arch\":\"arm64\",\"runner\":$ARM_RUNNER,\"file\":\"snap/snapcraft.postgres.yaml\",\"flavor\":\"postgres\"}"
-            fi
-          fi
-          SNAP="[${SNAP_ENTRIES}]"
 
           # Build deb matrix.
           DEB_ENTRIES=""
@@ -187,20 +135,14 @@ jobs:
 
           # Fail loudly on malformed JSON: fromJSON on a bad string yields an
           # empty matrix and therefore no jobs, with nothing in the log.
-          python3 -c "import json,sys; json.loads(sys.argv[1])" "$SNAP"
           python3 -c "import json,sys; json.loads(sys.argv[1])" "$DEB"
 
-          # Simple boolean gates are reliable across skipped/always jobs;
-          # keep the JSON matrices as single-line outputs (works for amd64+arm64).
-          echo "snap=$SNAP" >> "$GITHUB_OUTPUT"
           echo "deb=$DEB" >> "$GITHUB_OUTPUT"
-          if [ "$SNAP" = "[]" ]; then echo "has_snap=false" >> "$GITHUB_OUTPUT"; else echo "has_snap=true" >> "$GITHUB_OUTPUT"; fi
           if [ "$DEB" = "[]" ]; then echo "has_deb=false" >> "$GITHUB_OUTPUT"; else echo "has_deb=true" >> "$GITHUB_OUTPUT"; fi
-          echo "snap matrix: $SNAP"
-          echo "deb  matrix: $DEB"
+          echo "deb matrix: $DEB"
 
   # ---------------------------------------------------------------------------
-  # .deb -- one job per distribution, runs concurrently with snap jobs.
+  # .deb -- one job per distribution.
   # Skipped when nothing deb-relevant changed (matrix outputs empty array).
   # ---------------------------------------------------------------------------
   deb:
@@ -287,116 +229,12 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
-  # snap -- concurrent with the .deb jobs.
-  # Skipped when nothing snap-relevant changed (matrix outputs empty array).
-  # The flavor field drives the artifact name: mariadb → vybench, postgres → vypgbench.
-  # ---------------------------------------------------------------------------
-  snap:
-    name: snap · ${{ matrix.flavor }} · ${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
-    needs: matrix
-    if: ${{ needs.matrix.outputs.has_snap == 'true' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.matrix.outputs.snap) }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - name: Cache Snapcraft
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/snapcraft
-          key: snap-${{ matrix.flavor }}-${{ matrix.arch }}-${{ hashFiles(matrix.file) }}
-          restore-keys: |
-            snap-${{ matrix.flavor }}-${{ matrix.arch }}-
-
-      # snapcore/action-build only accepts `path` (project dir), NOT a
-      # snapcraft-file input. A bogus `snapcraft-file:` is ignored and every
-      # matrix cell silently builds snap/snapcraft.yaml → name: vybench.
-      # That published vypgbench builds into the vybench store (rev 18).
-      # Stage the selected recipe as the canonical snap/snapcraft.yaml.
-      - name: Stage snapcraft recipe
-        run: |
-          set -euo pipefail
-          echo "Using ${{ matrix.file }} as snap/snapcraft.yaml"
-          if [ "${{ matrix.file }}" != "snap/snapcraft.yaml" ]; then
-            cp "${{ matrix.file }}" snap/snapcraft.yaml
-          fi
-          # Prove the staged name matches the matrix flavor before we burn a build.
-          staged="$(awk '/^name:/{print $2; exit}' snap/snapcraft.yaml)"
-          case "${{ matrix.flavor }}" in
-            mariadb)  want=vybench ;;
-            postgres) want=vypgbench ;;
-            *) echo "::error::unknown flavor ${{ matrix.flavor }}"; exit 1 ;;
-          esac
-          if [ "$staged" != "$want" ]; then
-            echo "::error::staged snap name '$staged' != expected '$want' for flavor ${{ matrix.flavor }}"
-            exit 1
-          fi
-          echo "staged name=$staged (ok)"
-
-      # Canonical's official action. It provisions LXD correctly, which the
-      # previous hand-rolled setup could not: `usermod -aG lxd $USER` followed by
-      # `newgrp lxd` inside one `run:` step cannot affect later steps, so
-      # snapcraft always came back with "LXD requires additional permissions".
-      - name: Build snap
-        id: build
-        uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1
-        with:
-          path: .
-          # Omits snap/manifest.yaml. The store uses it to flag vulnerable
-          # stage-packages, but it also enumerates everything the snap was built
-          # from -- which this being a private, commercial artefact argues against.
-          build-info: false
-
-      - name: Assert packed snap name
-        run: |
-          set -euo pipefail
-          sudo apt-get install -y -qq squashfs-tools
-          SNAP="${{ steps.build.outputs.snap }}"
-          case "${{ matrix.flavor }}" in
-            mariadb)  want=vybench ;;
-            postgres) want=vypgbench ;;
-          esac
-          # meta/snap.yaml inside the squashfs is what the store uses.
-          got="$(unsquashfs -cat "$SNAP" meta/snap.yaml | awk '/^name:/{print $2; exit}')"
-          echo "packed=$SNAP store-name=$got want=$want"
-          if [ "$got" != "$want" ]; then
-            echo "::error::refusing to publish: snap name is '$got', expected '$want'"
-            exit 1
-          fi
-
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: snap-${{ matrix.flavor }}-${{ matrix.arch }}
-          path: ${{ steps.build.outputs.snap }}
-          retention-days: 30
-          if-no-files-found: error
-
-      # Publish to the Snap Store. Each snap has its own store entry:
-      #   mariadb flavor → vybench (stable v16)
-      #   postgres flavor → vypgbench (develop / PostgreSQL)
-      # Channel is 'edge' for manual publish and tag releases; promote to
-      # 'stable' through the store dashboard after validation.
-      - name: Publish snap to Snap Store
-        if: inputs.publish_snap || startsWith(github.ref, 'refs/tags/v')
-        uses: snapcore/action-publish@214b86e5ca036ead1668c79afb81e550e6c54d40 # v1
-        env:
-          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
-        with:
-          snap: ${{ steps.build.outputs.snap }}
-          release: edge
-
-  # ---------------------------------------------------------------------------
-  # release -- only once every build above has succeeded on a tag push.
-  # Uses `if: always()` so a skipped deb or snap (empty matrix on a
-  # snap-only tag) does not block the release job.
+  # release -- only once every deb build above has succeeded on a tag push.
+  # Snaps are built by Snapcraft.io on push to main; not attached here.
   # ---------------------------------------------------------------------------
   release:
     name: Release
-    needs: [matrix, deb, snap]
+    needs: [matrix, deb]
     if: always() && startsWith(github.ref, 'refs/tags/v') && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-24.04
     permissions:
@@ -415,13 +253,13 @@ jobs:
       - name: Collect and checksum
         run: |
           mkdir -p dist
-          find artifacts -type f \( -name '*.deb' -o -name '*.snap' \) -exec mv -t dist/ {} +
+          find artifacts -type f -name '*.deb' -exec mv -t dist/ {} +
 
           # The packages are NOT GPG-signed, so checksums are the only integrity
           # check a downloader has. Publish them alongside, and generate from
           # inside dist/ so the file lists bare names that `sha256sum -c` can
           # resolve next to the downloads.
-          ( cd dist && sha256sum ./*.deb ./*.snap > SHA256SUMS )
+          ( cd dist && sha256sum ./*.deb > SHA256SUMS )
           cat dist/SHA256SUMS
           ls -lh dist
 
@@ -462,6 +300,9 @@ jobs:
             Frappe v16 / ERPNext as installable packages.
 
             ### Snaps
+
+            Snap images are built and published by [Snapcraft.io](https://snapcraft.io/vybench/builds)
+            on push to `main` — not attached to this GitHub release.
 
             | Snap | Database | Install |
             | :--- | :--- | :--- |
