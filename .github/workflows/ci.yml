@@ -274,10 +274,30 @@ jobs:
           psql -h 127.0.0.1 -d postgres -v ON_ERROR_STOP=1 -c "ALTER USER postgres WITH PASSWORD 'pgci';" \
             || psql -h 127.0.0.1 -d postgres -v ON_ERROR_STOP=1 -c "CREATE USER postgres SUPERUSER PASSWORD 'pgci';"
           vybench bench new pgci --db postgres --switch=true
+          vybench bench switch pgci
+          PG_BENCH="$(brew --prefix)/var/vybench-local/benches/pgci"
+          # Pin the postgres bench and strip any inherited MariaDB socket so
+          # frappe's postgres path talks TCP to 127.0.0.1:5432.
+          python3 - "$PG_BENCH/sites/common_site_config.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+with open(path) as fh:
+    cfg = json.load(fh)
+cfg["db_type"] = "postgres"
+cfg["db_host"] = "127.0.0.1"
+cfg["db_port"] = 5432
+cfg.pop("db_socket", None)
+with open(path, "w") as fh:
+    json.dump(cfg, fh, indent=2)
+print(cfg)
+PY
+          export VYBENCH_BENCH="$PG_BENCH"
+          unset MYSQL_UNIX_PORT
           vybench bench new-site pg.localhost --admin-password admin \
             --db-type postgres --db-root-username postgres --db-root-password pgci --force
           vybench doctor --offline || true
           vybench bench list | grep -q pgci
+          unset VYBENCH_BENCH
 
           # 7. Verify Multi-Bench creation (secondary linked-style bench)
           vybench bench init /tmp/ci-secondary-bench --frappe-branch version-16 --skip-redis-config-generation --no-backups --skip-assets

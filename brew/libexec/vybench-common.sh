@@ -212,9 +212,15 @@ for path in files:
     except (OSError, ValueError):
         continue
     changed = False
+    # Never rewrite PostgreSQL benches/sites onto the MariaDB socket. Frappe's
+    # postgres path treats db_socket as a host directory for libpq, so a
+    # leftover mysql.sock path becomes ".../mysql.sock/.s.PGSQL.5432".
+    if cfg.get("db_type") == "postgres":
+        continue
     for key in ("redis_cache", "redis_queue", "redis_socketio"):
         if cfg.get(key) == old_redis:
             cfg[key] = new_redis
+            changed = True
     old_sockets = {"/tmp/mysql.sock", "/opt/homebrew/var/mysql/mysql.sock", "/usr/local/var/mysql/mysql.sock"}
     if cfg.get("db_socket") in old_sockets or (cfg.get("db_socket") == sock and str(cfg.get("db_port")) == "3306"):
         cfg["db_socket"] = sock

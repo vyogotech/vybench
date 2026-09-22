@@ -943,6 +943,8 @@ func (m *Manager) writeBenchConfig(benchPath, benchID, dbEngine, version string)
 		cfg["db_type"] = "postgres"
 		cfg["db_host"] = "127.0.0.1"
 		cfg["db_port"] = 5432
+		// MariaDB socket must not leak into a postgres bench: frappe's
+		// postgres driver treats db_socket as a libpq host directory.
 		delete(cfg, "db_socket")
 	} else {
 		cfg["db_type"] = "mariadb"
