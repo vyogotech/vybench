@@ -94,6 +94,14 @@ func (m JobModel) Active() bool { return m.job != nil }
 // Running reports whether the job is still running.
 func (m JobModel) Running() bool { return m.job != nil && !m.done }
 
+// Err is the job's result. It stays nil until the job goroutine finishes.
+func (m JobModel) Err() error {
+	if m.job == nil {
+		return nil
+	}
+	return m.job.Err()
+}
+
 // Cancel stops a running job.
 func (m JobModel) Cancel() {
 	if m.Running() {

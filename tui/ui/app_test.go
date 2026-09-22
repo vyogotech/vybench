@@ -201,6 +201,35 @@ func TestJobOverlayBlocksTabsUntilClosed(t *testing.T) {
 	f.app.Shutdown()
 }
 
+func TestCtrlCDuringJobCancelsInsteadOfQuitting(t *testing.T) {
+	f := newFixture(t)
+	release := make(chan struct{})
+	f.send(views.RunJobMsg{Title: "slow", Spec: core.JobSpec{Steps: []core.Step{{Fn: func(func(string)) error {
+		<-release
+		return nil
+	}}}}})
+	m, cmd := f.app.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	f.app = m.(App)
+	if cmd != nil {
+		if msg := cmd(); msg != nil {
+			if _, ok := msg.(tea.QuitMsg); ok {
+				t.Fatal("ctrl+c quit the app while a job was running")
+			}
+		}
+	}
+	if !f.app.job.Active() {
+		t.Fatal("ctrl+c dismissed the job overlay")
+	}
+	close(release)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && f.app.job.Err() == nil {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if f.app.job.Err() != core.ErrCancelled {
+		t.Fatalf("ctrl+c did not cancel the job: %v", f.app.job.Err())
+	}
+}
+
 func TestAppExtended(t *testing.T) {
 	f := newFixture(t)
 
@@ -304,5 +333,3 @@ func TestSwitchToMarketplaceFromSites(t *testing.T) {
 		t.Errorf("status bar missing target site prompt: %q", f.app.status)
 	}
 }
-
-
