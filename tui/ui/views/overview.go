@@ -34,6 +34,7 @@ type OverviewModel struct {
 	svcErr   error
 	loading  bool
 	visible  bool
+	stopping bool
 	width    int
 	height   int
 }
@@ -110,12 +111,24 @@ func (m OverviewModel) Update(msg tea.Msg) (OverviewModel, tea.Cmd) {
 		m.sites = core.DiscoverSites(m.bench.Path)
 
 	case tea.KeyMsg:
+		if m.stopping {
+			m.stopping = false
+			if msg.String() != "y" && msg.String() != "Y" {
+				return m, nil
+			}
+			steps, err := m.sup.ControlSteps("stop")
+			if err != nil {
+				return m, setError(err)
+			}
+			return m, runJob("Stop services", core.JobSpec{Steps: steps}, "Stop services: done", ServicesChangedMsg{})
+		}
 		action, title := "", ""
 		switch msg.String() {
 		case "s":
 			action, title = "start", "Start services"
 		case "x":
-			action, title = "stop", "Stop services"
+			m.stopping = true
+			return m, nil
 		case "r":
 			action, title = "restart", "Restart services"
 		case "u":
@@ -142,8 +155,14 @@ func (m OverviewModel) View(w, h int) string {
 		" ",
 		panel(rightW, panelH, m.renderBench(rightW-2, panelH-2)),
 	)
-	return lipgloss.JoinVertical(lipgloss.Left, row,
+	out := lipgloss.JoinVertical(lipgloss.Left, row,
 		helpBar(w, "s", "start all", "x", "stop all", "r", "restart all", "u", "refresh"))
+	if m.stopping {
+		out = overlay(out, dialog("Stop every service?",
+			[]string{"The site goes offline until you start them again."},
+			theme.StylePrimary.Render("[y] Stop")+"   "+theme.StyleMuted.Render("[any other key] Cancel")), w, h)
+	}
+	return out
 }
 
 func (m OverviewModel) renderServices(w int) string {

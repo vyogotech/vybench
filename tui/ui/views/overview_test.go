@@ -52,13 +52,29 @@ func TestOverviewModel(t *testing.T) {
 		t.Errorf("View does not contain expected service text: %s", view)
 	}
 
-	// Key actions: s, x, r
-	for _, key := range []string{"s", "x", "r"} {
+	// Key actions: s and r run immediately. x asks first.
+	for _, key := range []string{"s", "r"} {
 		var cmd tea.Cmd
 		m, cmd = m.Update(press(key))
 		if cmd == nil {
 			t.Errorf("key %s should produce command", key)
 		}
+	}
+	m, cmd := m.Update(press("x"))
+	if _, ok := find[RunJobMsg](run(cmd)); ok || !m.stopping {
+		t.Fatal("stop ran without confirmation")
+	}
+	m, cmd = m.Update(press("n"))
+	if m.stopping {
+		t.Fatal("n did not cancel the stop")
+	}
+	if _, ok := find[RunJobMsg](run(cmd)); ok {
+		t.Fatal("cancelled stop still started a job")
+	}
+	m, _ = m.Update(press("x"))
+	m, cmd = m.Update(press("y"))
+	if cmd == nil {
+		t.Fatal("confirmed stop produced no command")
 	}
 
 	// Tick message
@@ -150,6 +166,3 @@ func TestOverviewRenderBenchVariants(t *testing.T) {
 		t.Errorf("expected ellipsis in site list: %s", bViewMany)
 	}
 }
-
-
-

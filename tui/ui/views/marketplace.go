@@ -65,6 +65,7 @@ type MarketplaceModel struct {
 	fpmVersion  string
 	fpmLatest   string
 	fpmUpdating bool
+	confirming  bool
 
 	inspector viewport.Model
 	width     int
@@ -153,7 +154,7 @@ func (m MarketplaceModel) updateFPM() tea.Cmd {
 }
 
 // CapturingInput reports whether the search box owns the keyboard.
-func (m MarketplaceModel) CapturingInput() bool { return m.searching }
+func (m MarketplaceModel) CapturingInput() bool { return m.searching || m.confirming }
 
 // SetSize sets the content area.
 func (m *MarketplaceModel) SetSize(w, h int) {
@@ -278,6 +279,13 @@ func (m MarketplaceModel) Update(msg tea.Msg) (MarketplaceModel, tea.Cmd) {
 		return m, cmd
 
 	case tea.KeyMsg:
+		if m.confirming {
+			m.confirming = false
+			if msg.String() == "y" || msg.String() == "Y" {
+				return m, m.install()
+			}
+			return m, nil
+		}
 		if m.searching {
 			switch msg.String() {
 			case "esc":
@@ -322,7 +330,13 @@ func (m MarketplaceModel) Update(msg tea.Msg) (MarketplaceModel, tea.Cmd) {
 			m.loading = true
 			return m, m.fetchCatalog()
 		case "i":
-			return m, m.install()
+			if pkg, ok := m.selected(); ok {
+				if d := m.details[pkg.FullName()]; d != nil && d.details.WheelPlatform != "" && !core.WheelsMatchHost(d.details.WheelPlatform) {
+					return m, setError(fmt.Errorf("these wheels were built for %s, which is not this machine", d.details.WheelPlatform))
+				}
+			}
+			m.confirming = true
+			return m, nil
 		case "u":
 			if m.fpmUpdating {
 				return m, nil
@@ -550,7 +564,21 @@ func (m MarketplaceModel) View(w, h int) string {
 		panel(inspW, h-1, theme.StyleBold.Render("App Inspector")+"\n"+m.inspector.View()),
 	)
 	help := helpBar(w, "↑↓", "select", "←→", "category", "/", "search", "t", "target site", "i", "install", "r", "reload", "^U/^D", "scroll details")
-	return lipgloss.JoinVertical(lipgloss.Left, body, help)
+	out := lipgloss.JoinVertical(lipgloss.Left, body, help)
+	if m.confirming {
+		name := "this app"
+		if pkg, ok := m.selected(); ok {
+			name = pkg.VersionedName()
+		}
+		where := "the bench"
+		if site := m.targetSite(); site != "" {
+			where = site
+		}
+		out = overlay(out, dialog("Install "+name+" into "+where+"?",
+			[]string{"fpm writes the app into this bench. This cannot be undone from here."},
+			theme.StylePrimary.Render("[y] Install")+"   "+theme.StyleMuted.Render("[any other key] Cancel")), w, h)
+	}
+	return out
 }
 
 func (m MarketplaceModel) viewList(w int) string {

@@ -489,6 +489,13 @@ func resolveMariaDBRootPassword(benchPath string, explicit string) string {
 	return ResolveMariaDBRootPassword(benchPath, explicit)
 }
 
+// Snap paths are only candidates on a snap install. A native or Homebrew
+// bench must not read another machine's leftover /var/snap tree.
+var (
+	snapMariaDBRootPassword = "/var/snap/vybench/common/mariadb/root_password"
+	snapMariaDBSocket       = "/var/snap/vybench/common/run/mysql.sock"
+)
+
 func ResolveMariaDBRootPassword(benchPath string, explicit string) string {
 	if explicit = strings.TrimSpace(explicit); explicit != "" {
 		return explicit
@@ -498,10 +505,10 @@ func ResolveMariaDBRootPassword(benchPath string, explicit string) string {
 	if snapCommon != "" {
 		candidates = append(candidates, filepath.Join(snapCommon, "mariadb", "root_password"))
 	}
-	candidates = append(candidates,
-		"/var/snap/vybench/common/mariadb/root_password",
-		filepath.Join(benchPath, "config", "mariadb_root_password"),
-	)
+	candidates = append(candidates, filepath.Join(benchPath, "config", "mariadb_root_password"))
+	if DetectPlatform() == PlatformSnap {
+		candidates = append(candidates, snapMariaDBRootPassword)
+	}
 	for _, p := range candidates {
 		if data, err := os.ReadFile(p); err == nil {
 			if pw := strings.TrimSpace(string(data)); pw != "" {
@@ -540,9 +547,9 @@ func resolveMariaDBSocket(benchPath string) string {
 	if snapCommon != "" {
 		candidates = append(candidates, filepath.Join(snapCommon, "run", "mysql.sock"))
 	}
-	candidates = append(candidates,
-		"/var/snap/vybench/common/run/mysql.sock",
-	)
+	if DetectPlatform() == PlatformSnap {
+		candidates = append(candidates, snapMariaDBSocket)
+	}
 	for _, p := range candidates {
 		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
 			return p

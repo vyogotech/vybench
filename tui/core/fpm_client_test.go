@@ -90,6 +90,21 @@ func TestFetchCatalogFallsBackVisibly(t *testing.T) {
 	}
 }
 
+func TestFPMDetailsPath(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.URL.EscapedPath()
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+	c := &FPMClient{RegistryURL: srv.URL, httpClient: http.DefaultClient}
+	_, _ = c.FetchDetails(context.Background(), FPMPackage{Org: "acme/team", Name: "my app"})
+	want := "/metadata/acme%2Fteam/my%20app/package-metadata.json"
+	if got != want {
+		t.Fatalf("path %q, want %q", got, want)
+	}
+}
+
 func TestFetchDetails(t *testing.T) {
 	c := &FPMClient{RegistryURL: registry(t).URL, httpClient: http.DefaultClient}
 	d, err := c.FetchDetails(context.Background(), FPMPackage{Org: "frappe", Name: "crm", Version: "1.83.0"})

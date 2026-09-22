@@ -159,6 +159,17 @@ func benchEnv(benchPath string) []string {
 	env = setEnv(env, "VYBENCH_BENCH", benchPath)
 	env = setEnv(env, "BENCH_ROOT", benchPath)
 	env = setEnv(env, "FRAPPE_BENCH_ROOT", benchPath)
+
+	// The tui snap command runs the Go binary directly without sourcing
+	// snap-common.sh, so MAGIC may be unset.  file(1) inside strict
+	// confinement cannot read /etc/magic and fails, which breaks
+	// bench restore.  Point it at the compiled magic database shipped
+	// inside the snap payload.
+	if DetectPlatform() == PlatformSnap && os.Getenv("MAGIC") == "" {
+		if p := filepath.Join(os.Getenv("SNAP"), "usr", "lib", "file", "magic.mgc"); fileExists(p) {
+			env = setEnv(env, "MAGIC", p)
+		}
+	}
 	return env
 }
 

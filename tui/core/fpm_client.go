@@ -251,10 +251,11 @@ func interleaveFamilies(ips []net.IPAddr) []net.IPAddr {
 // configured registry in turn, so a working mirror is reached in seconds rather
 // than after the primary has exhausted its retries. A refusal ends it: a 404
 // says the same thing however often it is asked.
-func (c *FPMClient) getJSON(ctx context.Context, path string, v any) error {
+func (c *FPMClient) getJSON(ctx context.Context, v any, elems ...string) error {
 	var urls []string
 	for _, base := range c.registries() {
-		u, err := url.JoinPath(base, path)
+		parts := append([]string{base}, elems...)
+		u, err := url.JoinPath(parts[0], parts[1:]...)
 		if err != nil {
 			return err
 		}
@@ -344,7 +345,7 @@ func (c *FPMClient) FetchCatalog(ctx context.Context) Catalog {
 			UpdatedAt     string `json:"updated_at"`
 		} `json:"packages"`
 	}
-	err := c.getJSON(ctx, "metadata/index.json", &idx)
+	err := c.getJSON(ctx, &idx, "metadata", "index.json")
 	if err == nil && len(idx.Packages) == 0 {
 		err = errors.New("the registry index lists no packages")
 	}
@@ -394,7 +395,7 @@ func (c *FPMClient) FetchDetails(ctx context.Context, pkg FPMPackage) (PackageDe
 			WheelPythonVersion  string   `json:"wheel_python_version"`
 		} `json:"versions"`
 	}
-	if err := c.getJSON(ctx, "metadata/"+pkg.Org+"/"+pkg.Name+"/package-metadata.json", &meta); err != nil {
+	if err := c.getJSON(ctx, &meta, "metadata", url.PathEscape(pkg.Org), url.PathEscape(pkg.Name), "package-metadata.json"); err != nil {
 		return PackageDetails{}, err
 	}
 	d := PackageDetails{Title: meta.Title}

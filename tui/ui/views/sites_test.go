@@ -642,3 +642,26 @@ func TestSuccessfulCreateAnnouncesTheSite(t *testing.T) {
 		t.Error("a successful creation does not clear an earlier failure mark")
 	}
 }
+
+func TestDomainDialogFields(t *testing.T) {
+	d := &domainDialog{}
+	if len(d.fields()) != 3 {
+		t.Fatalf("fields %v", d.fields())
+	}
+	d.focus = 0
+	if d.input() != &d.domain {
+		t.Fatal("focus 0")
+	}
+	d.focus = 1
+	if d.input() != &d.cert {
+		t.Fatal("focus 1")
+	}
+	d.focus = 2
+	if d.input() != &d.key {
+		t.Fatal("focus 2")
+	}
+	d.focus = 9
+	if d.input() != nil {
+		t.Fatal("focus 9")
+	}
+}

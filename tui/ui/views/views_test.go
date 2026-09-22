@@ -245,7 +245,19 @@ func TestMarketplaceInstall(t *testing.T) {
 		t.Fatalf("catalog not loaded: %+v", m.catalog)
 	}
 	m, _ = m.Update(press("t")) // target the site
-	_, cmd := m.Update(press("i"))
+	m, cmd := m.Update(press("i"))
+	if _, ok := find[RunJobMsg](run(cmd)); ok {
+		t.Fatal("install started before confirmation")
+	}
+	if !m.confirming {
+		t.Fatal("install was not confirmed")
+	}
+	m, cmd = m.Update(press("n"))
+	if m.confirming {
+		t.Fatal("n did not cancel the install")
+	}
+	m, _ = m.Update(press("i"))
+	_, cmd = m.Update(press("y"))
 	job, ok := find[RunJobMsg](run(cmd))
 	if !ok {
 		t.Fatal("no install job")
@@ -253,6 +265,20 @@ func TestMarketplaceInstall(t *testing.T) {
 	install := job.Spec.Steps[len(job.Spec.Steps)-1].Cmd.Args
 	if !slices.Equal(install[1:], []string{"install", "frappe/crm==1.83.0", "--bench-path", bench, "--site", "one.localhost"}) {
 		t.Errorf("install = %v", install)
+	}
+}
+
+func TestMarketplaceBlocksForeignWheels(t *testing.T) {
+	bench := t.TempDir()
+	m := NewMarketplaceModel(core.NewFPMClient(), core.ActiveBench{Name: "b", Path: bench})
+	m.filtered = []core.FPMPackage{{Org: "frappe", Name: "crm", Version: "1.0.0"}}
+	m.details["frappe/crm"] = &detailState{details: core.PackageDetails{WheelPlatform: "manylinux2014_s390x"}}
+	m, cmd := m.Update(press("i"))
+	if m.confirming {
+		t.Fatal("confirm opened for wheels that cannot run here")
+	}
+	if _, ok := find[RunJobMsg](run(cmd)); ok {
+		t.Fatal("install job started for foreign wheels")
 	}
 }
 

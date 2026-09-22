@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/vyogotech/vybench/tui/core"
@@ -353,6 +354,66 @@ func TestRunMain(t *testing.T) {
 	}
 }
 
+func TestWrapDetail(t *testing.T) {
+	if got := wrapDetail("one two three", 7, "  "); got != "one two\n  three" {
+		t.Fatalf("%q", got)
+	}
+	if got := wrapDetail("", 10, " "); got != "" {
+		t.Fatalf("empty %q", got)
+	}
+}
+
+func TestRunDoctorCLI(t *testing.T) {
+	var errBuf bytes.Buffer
+	if code := runDoctorCLI([]string{"--nope"}, ioDiscard(), &errBuf); code != 2 {
+		t.Fatalf("bad flag code %d: %s", code, errBuf.String())
+	}
+	if !strings.Contains(errBuf.String(), "Usage:") {
+		t.Fatalf("stderr %s", errBuf.String())
+	}
+
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("VYBENCH_VAR", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	var empty bytes.Buffer
+	if code := runDoctorCLI([]string{"--all", "--offline"}, &empty, &empty); code != 0 && code != 1 {
+		t.Fatalf("--all code %d %s", code, empty.String())
+	}
+	if !strings.Contains(empty.String(), "Checking ") {
+		t.Fatalf("--all report:\n%s", empty.String())
+	}
+
+	bench := t.TempDir()
+	for _, d := range []string{"sites", "config/pids", "logs", "apps", "env"} {
+		if err := os.MkdirAll(filepath.Join(bench, d), 0o775); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(bench, "sites", "common_site_config.json"), []byte(`{"db_type":"postgres"}`), 0o664); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if code := runDoctorCLI([]string{"--bench-path", bench, "--offline"}, &out, &out); code != 0 && code != 1 {
+		t.Fatalf("doctor code %d\n%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "Checking "+bench) {
+		t.Fatalf("report:\n%s", out.String())
+	}
+
+	if err := os.Chmod(filepath.Join(bench, "sites"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := runDoctorCLI([]string{"--bench-path", bench, "--offline", "--fix"}, &out, &out); code != 0 && code != 1 {
+		t.Fatalf("doctor --fix code %d\n%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "Re-checking") && !strings.Contains(out.String(), "Nothing to fix") {
+		t.Fatalf("fix report:\n%s", out.String())
+	}
+}
+
+func ioDiscard() *bytes.Buffer { return &bytes.Buffer{} }
+
 func TestMainEntrypoint(t *testing.T) {
 	if os.Getenv("GO_WANT_MAIN_RUN") == "1" {
 		os.Args = []string{"vybench", "bench", "list"}
@@ -366,4 +427,3 @@ func TestMainEntrypoint(t *testing.T) {
 		t.Fatalf("main process failed: %v\nOutput: %s", err, string(out))
 	}
 }
-

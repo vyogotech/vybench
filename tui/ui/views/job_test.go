@@ -126,3 +126,8 @@ func TestJobModelLifecycleAndViews(t *testing.T) {
 	}
 }
 
+func TestJobErrBeforeStart(t *testing.T) {
+	if err := (JobModel{}).Err(); err != nil {
+		t.Fatal(err)
+	}
+}

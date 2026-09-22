@@ -1061,7 +1061,8 @@ func writeAppsTxt(benchPath string, names []string) error {
 }
 
 func appsOnDisk(benchPath string) []string {
-	entries, err := os.ReadDir(filepath.Join(benchPath, "apps"))
+	appsDir := filepath.Join(benchPath, "apps")
+	entries, err := os.ReadDir(appsDir)
 	if err != nil {
 		return nil
 	}
@@ -1071,9 +1072,22 @@ func appsOnDisk(benchPath string) []string {
 		if strings.HasPrefix(n, ".") || n == "README.md" {
 			continue
 		}
-		if isDir(filepath.Join(benchPath, "apps", n)) {
-			out = append(out, n)
+		full := filepath.Join(appsDir, n)
+		if !isDir(full) {
+			continue
 		}
+		// A symlink named "apps" inside apps/ is a stale bootstrap artifact
+		// (apps -> /snap/.../apps); skip it rather than treating the parent
+		// directory as an app.
+		if n == "apps" {
+			if target, err := os.Readlink(full); err == nil {
+				resolved, _ := filepath.EvalSymlinks(full)
+				if resolved == appsDir || strings.HasSuffix(target, "/apps") {
+					continue
+				}
+			}
+		}
+		out = append(out, n)
 	}
 	return out
 }
@@ -1275,11 +1289,23 @@ func chownDaemonTree(root string) {
 	})
 }
 
+func daemonAccount() (string, bool) {
+	switch DetectPlatform() {
+	case PlatformSnap:
+		return "snap_daemon", true
+	case PlatformNative:
+		return "frappe", true
+	default:
+		return "", false
+	}
+}
+
 func daemonIDs() (int, int, bool) {
-	if DetectPlatform() != PlatformSnap || os.Geteuid() != 0 {
+	name, ok := daemonAccount()
+	if !ok || os.Geteuid() != 0 {
 		return 0, 0, false
 	}
-	u, err := user.Lookup("snap_daemon")
+	u, err := user.Lookup(name)
 	if err != nil {
 		return 0, 0, false
 	}
