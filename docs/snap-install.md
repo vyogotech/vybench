@@ -16,6 +16,8 @@ Nothing is taken from the host, ensuring zero library conflicts and zero host OS
 sudo snap install vybench
 ```
 
+On a DigitalOcean Droplet, site data can live on a Block Storage volume. See [Droplet storage](droplet-storage.md).
+
 Local build:
 
 ```bash

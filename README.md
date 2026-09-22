@@ -438,7 +438,7 @@ snapcraft --destructive-mode
 
 Continuous Integration is managed via `.github/workflows/ci.yml`:
 * **Fast Tier (~1 min):** Validates shell syntax, YAML schemas, JSON configs, and Nginx template drift.
-* **Slow Tier:** Automatically builds packages and runs full integration tests on **Ubuntu 24.04** and **Debian 12**.
+* **Slow Tier:** Builds the native packages and runs full integration tests on **Ubuntu 24.04** and **Debian 12**. Snaps are not packed in GitHub Actions. Snapcraft.io builds them on push to `main`.
 
 ---
 
