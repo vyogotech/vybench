@@ -13,3 +13,6 @@ stage/
 
 # Built by `make tui` (host-arch binary; the formula and snap build their own).
 brew/bin/vybench-tui
+
+__pycache__/
+*.pyc

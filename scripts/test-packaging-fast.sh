@@ -99,7 +99,7 @@ try "snap-common.sh puts \$SNAP/lib/python on PYTHONPATH" \
 try "snap-common.sh does not mutate apps/frappe commands/__init__.py" \
     "! grep -qw 'wrap_try' '$ROOT/snap/local/bin/snap-common.sh'"
 try "sitecustomize.py catches psutil AccessDenied/OSError cleanly" \
-    "PYTHONPATH='$ROOT/snap/local/lib/python' python3 - <<'PY'
+    "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='$ROOT/snap/local/lib/python' python3 - <<'PY'
 import os, subprocess, sys, tempfile
 
 # 1. psutil must not be imported eagerly at Python startup
