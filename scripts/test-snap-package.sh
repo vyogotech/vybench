@@ -37,6 +37,14 @@ done
 echo "=== Switching to developer mode ==="
 sudo snap set "$SNAP_NAME" mode=developer
 
+echo "=== Verifying apps/frappe has clean git working tree (issue #3) ==="
+FRAPPE_DIRTY=$(sudo git -c safe.directory='*' -C "/var/snap/$SNAP_NAME/common/bench/apps/frappe" status --porcelain || true)
+if [ -n "$FRAPPE_DIRTY" ]; then
+  echo "::error::apps/frappe has uncommitted modifications after switching to developer mode:"
+  echo "$FRAPPE_DIRTY"
+  exit 1
+fi
+
 USER_NAME="${SUDO_USER:-${USER:-varun}}"
 echo "=== Adding current user ($USER_NAME) to snap_daemon group ==="
 sudo usermod -aG snap_daemon "$USER_NAME" 2>/dev/null || true

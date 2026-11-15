@@ -24,7 +24,11 @@ MARIADB_BASE="$(brew --prefix mariadb 2>/dev/null || echo /opt/homebrew/opt/mari
 
 if [ ! -d "$DATA_DIR/mysql" ]; then
   echo "vybench: Initializing MariaDB system database in $DATA_DIR..."
+  # --no-defaults must be the first argument so host my.cnf files (e.g.
+  # /opt/homebrew/etc/my.cnf or ~/.my.cnf for port 3306) cannot leak into
+  # vybench's dedicated MariaDB instance.
   mariadb-install-db \
+    --no-defaults \
     --basedir="$MARIADB_BASE" \
     --datadir="$DATA_DIR" \
     --auth-root-authentication-method=normal \
@@ -34,6 +38,7 @@ if [ ! -d "$DATA_DIR/mysql" ]; then
   INIT_SOCK="$DATA_DIR/init.sock"
 
   mariadbd \
+    --no-defaults \
     --basedir="$MARIADB_BASE" \
     --datadir="$DATA_DIR" \
     --socket="$INIT_SOCK" \
@@ -46,7 +51,7 @@ if [ ! -d "$DATA_DIR/mysql" ]; then
     sleep 1
   done
 
-  mariadb -u root -S "$INIT_SOCK" -e "
+  mariadb --no-defaults -u root -S "$INIT_SOCK" -e "
     SET PASSWORD FOR 'root'@'localhost' = PASSWORD('$ROOT_PW');
     CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED BY '$ROOT_PW';
     SET PASSWORD FOR 'root'@'127.0.0.1' = PASSWORD('$ROOT_PW');
@@ -54,7 +59,7 @@ if [ ! -d "$DATA_DIR/mysql" ]; then
     GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' WITH GRANT OPTION;
     FLUSH PRIVILEGES;"
 
-  mariadb-admin -u root -p"$ROOT_PW" -S "$INIT_SOCK" shutdown
+  mariadb-admin --no-defaults -u root -p"$ROOT_PW" -S "$INIT_SOCK" shutdown
   wait "$INIT_PID" 2>/dev/null || true
   rm -f "$INIT_SOCK" "$DATA_DIR/init.pid"
 
@@ -84,6 +89,7 @@ if [ ! -e /tmp/mysql.sock ] || [ -L /tmp/mysql.sock ]; then
 fi
 
 exec mariadbd \
+  --no-defaults \
   --basedir="$MARIADB_BASE" \
   --datadir="$DATA_DIR" \
   --socket="$SOCKET" \

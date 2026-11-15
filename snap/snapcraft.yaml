@@ -40,7 +40,7 @@ environment:
   # directory on LD_LIBRARY_PATH is ignored by the loader, so this is safe.
   PATH: $SNAP/usr/sbin:$SNAP/usr/bin:$SNAP/sbin:$SNAP/bin:$SNAP/opt/frappe-bench/env/bin:$PATH
   LD_LIBRARY_PATH: $SNAP/usr/lib/x86_64-linux-gnu:$SNAP/usr/lib/aarch64-linux-gnu:$SNAP/usr/lib:$SNAP/lib/x86_64-linux-gnu:$SNAP/lib/aarch64-linux-gnu:$SNAP/lib:$LD_LIBRARY_PATH
-  PYTHONPATH: $SNAP/opt/frappe-bench/apps/frappe:$SNAP/opt/frappe-bench/env/lib/python3.14/site-packages
+  PYTHONPATH: $SNAP/opt/frappe-bench/apps/frappe:$SNAP/opt/frappe-bench/env/lib/python3.14/site-packages:$SNAP/lib/python
   MYSQL_UNIX_PORT: $SNAP_COMMON/run/mysql.sock
   LC_ALL: C.UTF-8
   LANG: C.UTF-8
@@ -184,6 +184,7 @@ parts:
     override-build: |
       craftctl default
       chmod 755 $SNAPCRAFT_PART_INSTALL/bin/*
+      chmod -R a+rX $SNAPCRAFT_PART_INSTALL/lib
       # `tar` for everything that runs inside the snap. The base's GNU tar 1.35
       # probes openat2(2), which snapd's seccomp policy denies with EPERM rather
       # than ENOSYS -- and tar only falls back on ENOSYS, so every archive it
@@ -428,6 +429,7 @@ parts:
       if [ -d "$SITE_PACKAGES" ]; then
         find "$SITE_PACKAGES" -type f \( -name "*.pth" -o -name "*.py" -o -name "*.egg-link" \) \
           -exec sed -i "s|$SNAPCRAFT_PART_INSTALL/opt/frappe-bench|/snap/vybench/current/opt/frappe-bench|g" {} + 2>/dev/null || true
+        printf '/snap/vybench/current/lib/python\n' > "$SITE_PACKAGES/_vybench_snap.pth"
       fi
 
       # --- Replace the build-time common_site_config.json ---

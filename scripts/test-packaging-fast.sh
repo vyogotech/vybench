@@ -83,6 +83,68 @@ sys.exit(1) if missing else None\""
 
 try "nginx template has not drifted" "$ROOT/scripts/check-nginx-template-drift.sh"
 
+# Snap and Homebrew MariaDB wrappers must pass --no-defaults on all 5 MariaDB
+# invocations (mariadb-install-db, bootstrap mariadbd, mariadb, mariadb-admin,
+# and exec mariadbd) so host /etc/mysql/mariadb.conf.d/provider_*.cnf or my.cnf
+# cannot leak into the isolated server on WSL2 / non-AppArmor / macOS hosts.
+try "snap mariadb-wrapper isolates from host my.cnf (--no-defaults)" \
+    "test \"\$(grep -c -- '--no-defaults' '$ROOT/snap/local/bin/mariadb-wrapper')\" -ge 5"
+try "brew vybench-mariadb-wrapper isolates from host my.cnf (--no-defaults)" \
+    "test \"\$(grep -c -- '--no-defaults' '$ROOT/brew/libexec/vybench-mariadb-wrapper')\" -ge 5"
+
+try "snapcraft.yaml puts \$SNAP/lib/python on PYTHONPATH" \
+    "grep -q 'PYTHONPATH:.*\\\$SNAP/lib/python' '$ROOT/snap/snapcraft.yaml'"
+try "snap-common.sh puts \$SNAP/lib/python on PYTHONPATH" \
+    "grep -q 'PYTHONPATH=.*\\\$SNAP/lib/python' '$ROOT/snap/local/bin/snap-common.sh'"
+try "snap-common.sh does not mutate apps/frappe commands/__init__.py" \
+    "! grep -qw 'wrap_try' '$ROOT/snap/local/bin/snap-common.sh'"
+try "sitecustomize.py catches psutil AccessDenied/OSError cleanly" \
+    "PYTHONPATH='$ROOT/snap/local/lib/python' python3 - <<'PY'
+import os, subprocess, sys, tempfile
+
+# 1. psutil must not be imported eagerly at Python startup
+assert 'psutil' not in sys.modules, 'psutil was eagerly imported by sitecustomize'
+
+# 2. Fake psutil module imported via normal import mechanism (triggers MetaPathFinder)
+with tempfile.TemporaryDirectory() as d:
+    with open(os.path.join(d, 'psutil.py'), 'w') as fh:
+        fh.write('''
+class Error(Exception): pass
+class AccessDenied(Error): pass
+class Process:
+    def nice(self, value=None):
+        if value is None:
+            return 0
+        raise AccessDenied('blocked by seccomp')
+    def ionice(self, ioclass=None, value=None):
+        if ioclass is None:
+            if value is not None:
+                raise ValueError('ioclass required')
+            return (2, 4)
+        raise AccessDenied('ioprio_set blocked')
+''')
+    sys.path.insert(0, d)
+    import psutil
+    p = psutil.Process()
+    assert p.nice() == 0
+    assert p.nice(19) is None
+    assert p.ionice() == (2, 4)
+    assert p.ionice(3) is None
+    assert p.ionice(2, 7) is None
+    try:
+        p.ionice(None, 2)
+        raise AssertionError('expected ValueError')
+    except ValueError:
+        pass
+    # Simulate frappe.commands.popen preexec_fn
+    def set_low_prio():
+        import psutil as ps
+        ps.Process().nice(19)
+        ps.Process().ionice(3)
+    rc = subprocess.call([sys.executable, '-c', 'pass'], preexec_fn=set_low_prio)
+    assert rc == 0, f'expected rc=0, got {rc}'
+PY"
+
 echo "==> synthetic payload"
 # Minimal tree containing exactly what the stager asserts, and nothing else.
 SP="$WORK/payload"

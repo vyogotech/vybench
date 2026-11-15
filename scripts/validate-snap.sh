@@ -79,6 +79,33 @@ if [ -f "$TARGET" ] && [[ "$TARGET" == *.yaml ]]; then
     echo " [WARN] Missing snap_daemon system username"
   fi
 
+  # Check 5: MariaDB wrapper isolates from host /etc/mysql (--no-defaults)
+  SNAP_LOCAL="$(dirname "$TARGET")/local"
+  MARIADB_WRAPPER="$SNAP_LOCAL/bin/mariadb-wrapper"
+  if [ -f "$MARIADB_WRAPPER" ]; then
+    if [ "$(grep -c -- '--no-defaults' "$MARIADB_WRAPPER")" -ge 5 ]; then
+      echo " [PASS] mariadb-wrapper passes --no-defaults to isolate from host /etc/mysql"
+    else
+      echo " [FAIL] mariadb-wrapper missing --no-defaults on MariaDB invocations"
+      ERRORS=$((ERRORS + 1))
+    fi
+  fi
+
+  # Check 6: psutil confinement shim lives in sitecustomize.py, not apps/frappe edits
+  if grep -q 'PYTHONPATH:.*\$SNAP/lib/python' "$TARGET" && [ -f "$SNAP_LOCAL/lib/python/sitecustomize.py" ]; then
+    echo " [PASS] sitecustomize.py runtime shim configured on PYTHONPATH"
+  else
+    echo " [FAIL] Missing \$SNAP/lib/python on PYTHONPATH or snap/local/lib/python/sitecustomize.py"
+    ERRORS=$((ERRORS + 1))
+  fi
+
+  if grep -qw 'wrap_try' "$SNAP_LOCAL/bin/snap-common.sh" 2>/dev/null; then
+    echo " [FAIL] snap-common.sh still mutates apps/frappe/frappe/commands/__init__.py in place"
+    ERRORS=$((ERRORS + 1))
+  else
+    echo " [PASS] snap-common.sh leaves apps/frappe git working tree clean"
+  fi
+
   echo ""
   if [ $ERRORS -eq 0 ]; then
     echo "==> SUCCESS: Static snapcraft.yaml validation passed!"
@@ -138,6 +165,16 @@ if [ -d "$TARGET" ]; then
       ERRORS=$((ERRORS + 1))
     else
       echo " [PASS] pyvenv.cfg paths are valid"
+    fi
+  fi
+
+  # Check 5: Primed/extracted snap includes wrapper shims
+  if [ -f "$TARGET/bin/mariadb-wrapper" ]; then
+    if [ -f "$TARGET/lib/python/sitecustomize.py" ]; then
+      echo " [PASS] lib/python/sitecustomize.py present in snap payload"
+    else
+      echo " [FAIL] Missing lib/python/sitecustomize.py in snap payload"
+      ERRORS=$((ERRORS + 1))
     fi
   fi
 

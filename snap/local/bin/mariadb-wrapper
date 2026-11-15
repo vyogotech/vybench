@@ -18,7 +18,13 @@ mkdir -p "$DATA_DIR"
 
 if [ ! -d "$DATA_DIR/mysql" ]; then
   echo "Initializing MariaDB system database in $DATA_DIR..."
+  # --no-defaults must be the first argument on every MariaDB binary below.
+  # snap-confine bind-mounts the host's /etc into the snap mount namespace; on
+  # WSL2 and non-AppArmor distros, /etc/mysql/my.cnf and /etc/mysql/mariadb.conf.d/
+  # (such as Ubuntu's provider_*.cnf drop-ins) are readable inside the snap and
+  # crash mariadbd when it looks for unshipped host plugins under $SNAP/usr.
   "$SNAP/usr/bin/mariadb-install-db" \
+    --no-defaults \
     --basedir="$SNAP/usr" \
     --datadir="$DATA_DIR" \
     --auth-root-authentication-method=normal \
@@ -33,6 +39,7 @@ if [ ! -d "$DATA_DIR/mysql" ]; then
   INIT_SOCK="$DATA_DIR/init.sock"
 
   "$SNAP/usr/sbin/mariadbd" \
+    --no-defaults \
     --basedir="$SNAP/usr" \
     --datadir="$DATA_DIR" \
     --socket="$INIT_SOCK" \
@@ -45,12 +52,12 @@ if [ ! -d "$DATA_DIR/mysql" ]; then
     sleep 1
   done
 
-  "$SNAP/usr/bin/mariadb" -u root -S "$INIT_SOCK" -e "
+  "$SNAP/usr/bin/mariadb" --no-defaults -u root -S "$INIT_SOCK" -e "
     ALTER USER 'root'@'localhost' IDENTIFIED BY '$ROOT_PW';
     ALTER USER 'root'@'127.0.0.1' IDENTIFIED BY '$ROOT_PW';
     FLUSH PRIVILEGES;"
 
-  "$SNAP/usr/bin/mariadb-admin" -u root -p"$ROOT_PW" -S "$INIT_SOCK" shutdown
+  "$SNAP/usr/bin/mariadb-admin" --no-defaults -u root -p"$ROOT_PW" -S "$INIT_SOCK" shutdown
   wait "$INIT_PID" 2>/dev/null || true
   rm -f "$INIT_SOCK" "$DATA_DIR/init.pid"
 
@@ -82,6 +89,7 @@ fi
 chmod u+rwx,g+rwx,o-rwx "$DATA_DIR" 2>/dev/null || true
 
 exec "$SNAP/usr/sbin/mariadbd" \
+  --no-defaults \
   --basedir="$SNAP/usr" \
   --datadir="$DATA_DIR" \
   --socket="$SOCKET" \

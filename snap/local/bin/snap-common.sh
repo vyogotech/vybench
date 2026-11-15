@@ -63,7 +63,7 @@ export LD_LIBRARY_PATH="$SNAP/usr/lib/x86_64-linux-gnu:$SNAP/usr/lib/aarch64-lin
 # would fail with "cannot open magic file". `bench restore` calls file(1) on
 # every backup it restores. Guarded so a build without it is left alone.
 [ -f "$SNAP/usr/lib/file/magic.mgc" ] && export MAGIC="$SNAP/usr/lib/file/magic.mgc"
-export PYTHONPATH="$BENCH_ROOT/apps/frappe:$BENCH_ROOT/env/lib/python3.14/site-packages"
+export PYTHONPATH="$BENCH_ROOT/apps/frappe:$BENCH_ROOT/env/lib/python3.14/site-packages:$SNAP/lib/python"
 # The socket lives OUTSIDE the data directory on purpose. The datadir holds the
 # actual database files and stays private to snap_daemon (0770); the socket
 # directory is world-traversable so any local user can connect without being
@@ -388,31 +388,41 @@ PYEOF
       PTH="$SP/${APP}.pth"
       daemon_test -f "$PTH" && as_daemon sed -i "s|/snap/${SNAP_NAME}/current/opt/frappe-bench/apps/${APP}|$B/apps/${APP}|g" "$PTH" 2>/dev/null || true
     done
+    # Register the snap runtime compatibility shims (sitecustomize.py) on the
+    # materialised venv's sys.path so invocations that clear PYTHONPATH still
+    # load the psutil nice/ionice confinement shim without touching apps/frappe.
+    as_daemon bash -c 'printf "%s\n" "$1" > "$2"' bash "$SNAP_STABLE/lib/python" "$SP/_vybench_snap.pth" 2>/dev/null || true
   fi
 
-  # Patch frappe's popen() set_low_prio to safely catch ionice/nice exceptions.
-  # Under snap confinement (and unprivileged snap_daemon execution), ioprio_set(2)
-  # is blocked by AppArmor/seccomp, raising SubprocessError: Exception occurred in preexec_fn.
+  # Older snap revisions patched apps/frappe/frappe/commands/__init__.py in
+  # place to wrap set_low_prio() in try/except, leaving `git -C apps/frappe
+  # status` dirty. The confinement fix now lives in $SNAP/lib/python/sitecustomize.py
+  # outside all app repos; if a prior revision left that exact patch behind on
+  # this bench, restore the original lines so upgrades recover a clean git tree.
   FRAPPE_CMDS="$B/apps/frappe/frappe/commands/__init__.py"
   if daemon_test -f "$FRAPPE_CMDS"; then
-    as_daemon python3 -c "
-import re
-path = '$FRAPPE_CMDS'
+    as_daemon "$SNAP/opt/frappe-bench/env/bin/python3.14" - "$FRAPPE_CMDS" <<'PYEOF' 2>/dev/null || true
+import re, sys
+path = sys.argv[1]
 try:
-    with open(path, 'r') as f:
+    with open(path, "r") as f:
         content = f.read()
-    if 'def set_low_prio():' in content and 'try:' not in content.split('def set_low_prio():')[1].split('proc = subprocess.Popen')[0]:
-        pattern = r'(def set_low_prio\(\):)(\n\s+import psutil[\s\S]*?)(?=\n\s+proc\s*=)'
-        def wrap_try(m):
-            lines = m.group(2).split('\n')
-            indented = '\n'.join('\t' + line if line.strip() else line for line in lines)
-            return m.group(1) + '\n\t\ttry:' + indented + '\n\t\texcept Exception:\n\t\t\tpass'
-        new_content = re.sub(pattern, wrap_try, content)
-        with open(path, 'w') as f:
+    pattern = (
+        r"(def set_low_prio\(\):)\n\t\ttry:"
+        r"(\n\t\t\timport psutil[\s\S]*?)"
+        r"\n\t\texcept Exception:\n\t\t\tpass(?=\n\s+proc\s*=)"
+    )
+    def unwrap_try(m):
+        lines = m.group(2).split("\n")
+        dedented = "\n".join(line[1:] if line.startswith("\t") else line for line in lines)
+        return m.group(1) + dedented
+    new_content = re.sub(pattern, unwrap_try, content)
+    if new_content != content:
+        with open(path, "w") as f:
             f.write(new_content)
 except Exception:
     pass
-" 2>/dev/null || true
+PYEOF
   fi
 
 
